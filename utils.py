@@ -2,6 +2,7 @@
 '''
 import json
 import re
+from os.path import expanduser
 
 import numpy as np
 import torch
@@ -54,7 +55,7 @@ class AmazonReviewDataset(Dataset):
                  device,
                  on_gpu=False):
         super().__init__()
-        with open(filename) as file:
+        with open(expanduser(filename)) as file:
             try:
                 data = json.load(file)
             except json.JSONDecodeError:
@@ -102,9 +103,9 @@ class AmazonReviewDataset(Dataset):
         string = string.replace('!', '.')
 
         for char in special_chars:
-            string = string.replace(char, ' '+char+' ')
+            string = string.replace(char, ' ' + char + ' ')
         l = string.replace('  ', ' ').split('.')
-        return [item.strip()+' .' for item in l]
+        return [item.strip() + ' .' for item in l]
 
     def to_tensor(self, text, batch_size):
         tensor_list = []
@@ -112,9 +113,9 @@ class AmazonReviewDataset(Dataset):
         for word in text.split(' '):
             encoded.append(self.pair.to_index(word))
 
-        step = len(encoded)//batch_size
-        for index in range(0, len(encoded)-step, step):
-            tensor_list.append(encoded[index:index+step])
+        step = len(encoded) // batch_size
+        for index in range(0, len(encoded) - step, step):
+            tensor_list.append(encoded[index:index + step])
         tensor_list = sorted(tensor_list, key=lambda x: len(x), reverse=True)
         tensor_list = [torch.tensor(line, dtype=torch.long)
                        for line in tensor_list]
@@ -135,6 +136,12 @@ class AmazonReviewDataset(Dataset):
     def size(self):
         return self.pair.size
 
+    def to_index(self, word):
+        return self.pair.to_index(word)
+
+    def to_word(self, index):
+        return self.pair._to_word[index]
+
 
 class MemoryBuffer:
 
@@ -144,7 +151,8 @@ class MemoryBuffer:
             self.target_R = target_R
             self.next_S = next_S
 
-        def replay(self, Q_func, loss_func, Q_optimizer):
+        def replay(self, Q_func, loss_func, Q_optimizer,
+                   inv_func, reconstruct_loss_func, inv_func_optimizer):
             predicted_val = Q_func(self.current_S)
             predicted_next = Q_func(self.target_R)
             predicted_R = predicted_val - predicted_next
@@ -154,6 +162,13 @@ class MemoryBuffer:
             Q_optimizer.zero_grad()
             loss.backward()
             Q_optimizer.step()
+
+            reconstructed = inv_func(Q_func)
+            loss = reconstruct_loss_func(reconstructed, self.current_S)
+
+            inv_func_optimizer.zero_grad()
+            loss.backward()
+            inv_func_optimizer.step()
 
     def __init__(self, loss_func, decay_factor=.25):
         self.loss_func = loss_func
@@ -168,9 +183,11 @@ class MemoryBuffer:
         self.memory.append(instance)
         return self
 
-    def optimize(self, Q_func, Q_optimizer):
+    def optimize(self, Q_func, Q_optimizer,
+                 inv_func, reconstruct_loss_func, inv_func_optimizer):
         for mem in self.memory:
-            mem.replay(Q_func, self.loss_func, Q_optimizer)
+            mem.replay(Q_func, self.loss_func, Q_optimizer,
+                       inv_func, reconstruct_loss_func, inv_func_optimizer)
 
     def update(self):
         to_discard = []
