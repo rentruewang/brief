@@ -8,7 +8,7 @@ from torch.nn import BCELoss, CrossEntropyLoss, MSELoss
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset
 
-from models import Discriminator, Q_Generator, Reconstructor
+from basic_models import Discriminator, Q_Generator, Reconstructor
 from utils import AmazonReviewDataset, MemoryBuffer
 
 parser = ArgumentParser()
@@ -34,7 +34,7 @@ args = parser.parse_args()
 if args.test:
     class TestDataset(Dataset):
         def __init__(self, *size):
-            self.data = torch.randint(0, 100, size=size)
+            self.data = torch.randint(0, 100, size=size, device=args.device)
 
         def __len__(self): return len(self.data)
 

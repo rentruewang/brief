@@ -6,32 +6,6 @@ from torch.distributions import Categorical
 from torch.nn import functional as F
 
 
-class Flatten(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, input):
-        return input.view(input.shape[0], -1)
-
-
-class Permute(nn.Module):
-    def __init__(self, *order):
-        super.__init__()
-        self.order = order
-
-    def forward(self, input):
-        return input.permute(*self.order)
-
-
-class Reshape(nn.Module):
-    def __init__(self, target_shape):
-        super.__init__()
-        self.target_shape = tuple(target_shape)
-
-    def forward(self, input):
-        return input.view(*self.target_shape)
-
-
 class Encoder(nn.Module):
 
     def __init__(self,
@@ -110,18 +84,6 @@ class AttnDecoder(nn.Module):
         return rnn_out, states
 
 
-class AC_Generator(nn.Module):
-    '''
-    off-policy, ppo2, actor-critic
-    '''
-
-    def __init__(self, voc_size):
-        super().__init__()
-
-    def forward(self, input):
-        pass
-
-
 class Q_Generator(nn.Module):
     '''
     Techniques: dueling dqn, epsilon-greedy
@@ -192,8 +154,8 @@ class Q_Generator(nn.Module):
                               batch_size]) < self.epsilon).astype('long')
             random_indices = np.stack([random_indices]*2, axis=-1)
 
-            random_word_output = torch.randint(
-                low=0, high=self.voc_size, size=[batch_size])
+            random_word_output = torch.randint(low=0, high=self.voc_size, size=[
+                                               batch_size], device=self.device)
 
             word_selection = torch.stack(
                 [current_word, random_word_output], dim=-1)
@@ -286,7 +248,7 @@ class Discriminator(nn.Module):
                           hidden_size=hidden_size,
                           num_layers=num_layers)
         self.grucell_list = [nn.GRUCell(
-            input_size=hidden_size, hidden_size=hidden_size) for i in range(num_layers)]
+            input_size=hidden_size, hidden_size=hidden_size).to(device) for i in range(num_layers)]
         self.score = nn.Linear(in_features=hidden_size*num_layers,
                                out_features=1)
 
