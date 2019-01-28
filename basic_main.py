@@ -3,19 +3,19 @@ from argparse import ArgumentParser
 import numpy as np
 import torch
 from numpy import random
-from torch import nn, optim
+from torch import cuda, nn, optim
 from torch.nn import BCELoss, CrossEntropyLoss, MSELoss
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset
 
 from basic_models import Discriminator, Q_Generator, Reconstructor
-from utils import AmazonReviewDataset, MemoryBuffer
+from utils import AmazonReviewDataset
 
 parser = ArgumentParser()
 parser.add_argument('epochs', type=int)
 parser.add_argument('json', type=str)
 parser.add_argument('--threshold', type=int, default=10)
-parser.add_argument('--batch', type=int, default=256)
+parser.add_argument('--batch', type=int, default=32)
 parser.add_argument('--timesteps', type=int, default=120)
 parser.add_argument('--hidden', type=int, default=400)
 parser.add_argument('--rnn_layers', type=int, default=2)
@@ -28,6 +28,7 @@ parser.add_argument('--epsilon', type=float, default=.1)
 parser.add_argument('--lr', type=float, default=1e-3)
 parser.add_argument('--predicted', type=int, default=1)
 parser.add_argument('--test', action='store_true')
+parser.add_argument('--size', type=list, default=[157, 241])
 # parser.add_argument('--Q', action='store_true')
 args = parser.parse_args()
 
@@ -44,7 +45,7 @@ if args.test:
 
         @property
         def size(self): return len(self.data)+1
-    dataset = TestDataset(args.maxlen, args.batch)
+    dataset = TestDataset(*args.size)
 else:
     dataset = AmazonReviewDataset(filename=args.json,
                                   threshold=args.threshold,
@@ -52,7 +53,10 @@ else:
                                   device=args.device,
                                   on_gpu=not args.off_gpu)
 
-dataloader = DataLoader(dataset, batch_size=args.batch, shuffle=True)
+dataloader = DataLoader(dataset,
+                        batch_size=args.maxlen,
+                        shuffle=True,
+                        drop_last=True)
 
 sos_value = dataset.to_index('__SOS__')
 
@@ -94,7 +98,7 @@ Q_optimizer = optim.RMSprop(Q_func.parameters(), lr=args.lr)
 R_optimizer = optim.RMSprop(reconstructor.parameters(), lr=args.lr)
 D_optimizer = optim.RMSprop(discriminator.parameters(), lr=args.lr)
 
-for epoch in range(args.epochs):
+for epoch in range(1, 1+args.epochs):
 
     print('epoch {} / {}'.format(epoch, args.epochs))
     avgloss = []
@@ -104,7 +108,6 @@ for epoch in range(args.epochs):
         loss = torch.tensor(0., device=args.device)
 
         # train discriminator
-        print('training D')
         dis_output = discriminator(dis_input)
         ones = torch.ones_like(dis_output, device=args.device)
 
@@ -123,8 +126,9 @@ for epoch in range(args.epochs):
 
         avgloss.append(loss.item())
 
+        cuda.empty_cache()
+
         # train Q function
-        print('training Q')
         sentences, Q_values = Q_func(q_input)
 
         dis_output = discriminator(sentences)
@@ -133,7 +137,7 @@ for epoch in range(args.epochs):
         for i in range(1, len(ones)):
             ones[i:] -= args.penalty
 
-        loss = mse_loss(dis_output, ones)
+        loss = mse_loss(Q_values, ones)
 
         Q_optimizer.zero_grad()
         loss.backward()
@@ -141,8 +145,9 @@ for epoch in range(args.epochs):
 
         avgloss.append(loss.item())
 
+        cuda.empty_cache()
+
         # train reconstructor
-        print('training R')
         distribution = reconstructor(sentences)
 
         loss = categorical_crossentropy(
@@ -153,6 +158,8 @@ for epoch in range(args.epochs):
         R_optimizer.step()
 
         avgloss.append(loss.item())
+
+        cuda.empty_cache()
 
     print('average loss: {}'.format(sum(avgloss) / len(avgloss)))
 

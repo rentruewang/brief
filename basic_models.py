@@ -30,7 +30,7 @@ class Encoder(nn.Module):
         output shape: $$(timesteps, batch, hidden_size)$$
         '''
 
-        return self.rnn(F.relu(self.embedding(input)), states)
+        return self.rnn(F.relu(self.embedding(input), inplace=True), states)
 
 
 class AttnDecoder(nn.Module):
@@ -61,7 +61,7 @@ class AttnDecoder(nn.Module):
         gru_out shape: $$(timesteps, batch, (num_directions=1)*hidden_size)$$
         '''
 
-        embedded = F.relu(self.embedding(input.view(-1, 1)))
+        embedded = F.relu(self.embedding(input.view(-1, 1)), inplace=True)
         # shape: batch, timestep=1, hidden_size
 
         info = torch.cat(
@@ -144,7 +144,7 @@ class Q_Generator(nn.Module):
 
             rnn_out, states = self.decoder(current_word, states, gru_out)
             values = (self.average(rnn_out) +
-                      self.advantage(rnn_out)).squeeze(0)
+                      self.advantage(rnn_out)).squeeze_(0)
 
             current_word = values.argmax(-1)
             # m = Categorical(current_word)

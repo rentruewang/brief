@@ -142,58 +142,7 @@ class AmazonReviewDataset(Dataset):
     def to_word(self, index):
         return self.pair._to_word[index]
 
-
-class MemoryBuffer:
-
-    class MemoryInstance:
-        def __init__(self, current_S, target_R, next_S):
-            self.current_S = current_S
-            self.target_R = target_R
-            self.next_S = next_S
-
-        def replay(self, Q_func, loss_func, Q_optimizer,
-                   inv_func, reconstruct_loss_func, inv_func_optimizer):
-            predicted_val = Q_func(self.current_S)
-            predicted_next = Q_func(self.target_R)
-            predicted_R = predicted_val - predicted_next
-
-            loss = loss_func(predicted_R, self.target_R)
-
-            Q_optimizer.zero_grad()
-            loss.backward()
-            Q_optimizer.step()
-
-            reconstructed = inv_func(Q_func)
-            loss = reconstruct_loss_func(reconstructed, self.current_S)
-
-            inv_func_optimizer.zero_grad()
-            loss.backward()
-            inv_func_optimizer.step()
-
-    def __init__(self, loss_func, decay_factor=.25):
-        self.loss_func = loss_func
-        self.memory = []
-        self.decay_factor = decay_factor
-
-    def __iadd__(self, other):
-        '''
-        other: list or tuple
-        '''
-        instance = self.MemoryInstance(*other)
-        self.memory.append(instance)
-        return self
-
-    def optimize(self, Q_func, Q_optimizer,
-                 inv_func, reconstruct_loss_func, inv_func_optimizer):
-        for mem in self.memory:
-            mem.replay(Q_func, self.loss_func, Q_optimizer,
-                       inv_func, reconstruct_loss_func, inv_func_optimizer)
-
-    def update(self):
-        to_discard = []
-        for index in range(len(self.memory)):
-            if random.uniform(low=0., high=1.) < self.decay_factor:
-                to_discard.append(index)
-
-        for index in reversed(to_discard):
-            self.memory.pop(index)
+    def to(self, device):
+        self.device = device
+        if self.on_gpu:
+            self.text = self.text.to(device)

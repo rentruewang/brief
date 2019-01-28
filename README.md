@@ -16,10 +16,8 @@ Here's the brief version:
 
 ![short-version](./short_version.png)
 
-In `basic_main.py`, the _Generator_, denoted **G**, the Discriminator, denoted **D**, and the Reconstructor, denoted **R**, are all `seq2seq` models. **G+R** is an **Auto Encoder Network**, while **G+D** is trained with **Inverse Reinforcement Learning**.
+In `basic_main.py`, the _Generator_, denoted **G**, the Discriminator, denoted **D**, and the Reconstructor, denoted **R**, are all `seq2seq` models. **G+R** is an **Auto Encoder Network**, while **G+D** is trained with **Inverse Reinforcement Learning**. Techniques in use: **Dueling DQN**.
 
-Right now only a version of _Dueling DQN_ is implemented. _More will be added._
-
-
+In comparison with `basic_main.py`, `Actor-Critic.py` and `Q.py` uses more advanced techniques, and is a lot more efficient in terms of memory.
 
 [paper]: http://speech.ee.ntu.edu.tw/~tlkagk/paper/learning-encode-text.pdf
