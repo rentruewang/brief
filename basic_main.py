@@ -9,7 +9,7 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset
 
 from basic_models import Discriminator, Q_Generator, Reconstructor
-from utils import AmazonReviewDataset
+from datasets import AmazonReviewDataset
 
 parser = ArgumentParser()
 parser.add_argument('epochs', type=int)
@@ -147,15 +147,17 @@ for epoch in range(1, 1+args.epochs):
 
         cuda.empty_cache()
 
-        # train reconstructor
-        distribution = reconstructor(sentences)
+        # train VAE
+        distribution = reconstructor(F.softmax(sentences, dim=-1))
 
         loss = categorical_crossentropy(
             distribution.permute(1, 2, 0), sentences.permute(1, 0))
 
         R_optimizer.zero_grad()
+        Q_optimizer.zero_grad()
         loss.backward()
         R_optimizer.step()
+        Q_optimizer.step()
 
         avgloss.append(loss.item())
 

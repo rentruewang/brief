@@ -33,6 +33,35 @@ class Encoder(nn.Module):
         return self.rnn(F.relu(self.embedding(input), inplace=True), states)
 
 
+class OneHotEncoder(nn.Module):
+    '''
+    input is supposed to be a one-hot vector,
+    or something similar like a softmax input    
+    '''
+
+    def __init__(self,
+                 voc_size,
+                 hidden_size,
+                 num_layers):
+        super().__init__()
+        self.embedding = nn.Linear(in_features=voc_size,
+                                   out_features=hidden_size)
+        self.rnn = nn.GRU(
+            input_size=hidden_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers
+        )
+
+    def forward(self, input, states):
+        '''
+        input shape: $$(timesteps, batch, voc_size)$$
+        states shape: $$(num_layers, batch, hidden_size)$$
+        output shape: $$(timesteps, batch, hidden_size)$$
+        '''
+
+        return self.rnn(F.relu(self.embedding(input), inplace=True), states)
+
+
 class AttnDecoder(nn.Module):
 
     def __init__(self,
@@ -144,7 +173,7 @@ class Q_Generator(nn.Module):
 
             rnn_out, states = self.decoder(current_word, states, gru_out)
             values = (self.average(rnn_out) +
-                      self.advantage(rnn_out)).squeeze_(0)
+                      self.advantage(rnn_out)).squeeze(0)
 
             current_word = values.argmax(-1)
             # m = Categorical(current_word)
@@ -163,7 +192,7 @@ class Q_Generator(nn.Module):
             current_word = word_selection.gather(
                 dim=-1, index=torch.tensor(random_indices, device=self.device))[:, 0]
 
-            batched_sentences.append(current_word)
+            batched_sentences.append(rnn_out)
 
             v_list = []
             for i, word in zip(range(len(values)), current_word):
@@ -184,9 +213,9 @@ class Reconstructor(nn.Module):
                  device,
                  num_layers=2):
         super().__init__()
-        self.encoder = Encoder(voc_size,
-                               hidden_size,
-                               num_layers)
+        self.encoder = OneHotEncoder(voc_size,
+                                     hidden_size,
+                                     num_layers)
         self.decoder = AttnDecoder(voc_size,
                                    hidden_size,
                                    time_steps,
@@ -204,7 +233,7 @@ class Reconstructor(nn.Module):
     def forward(self, input):
         '''
         Arguments:
-            input {tensor} -- [long sentence]
+            input {tensor} -- [long sentence probability]
             sos_value {int} -- [sos]
             termination {list} -- [max_len]
         '''
