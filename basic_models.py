@@ -30,7 +30,7 @@ class Encoder(nn.Module):
         output shape: $$(timesteps, batch, hidden_size)$$
         '''
 
-        return self.rnn(F.relu(self.embedding(input), inplace=True), states)
+        return self.rnn(F.relu(self.embedding(input)), states)
 
 
 class OneHotEncoder(nn.Module):
@@ -59,7 +59,7 @@ class OneHotEncoder(nn.Module):
         output shape: $$(timesteps, batch, hidden_size)$$
         '''
 
-        return self.rnn(F.relu(self.embedding(input), inplace=True), states)
+        return self.rnn(F.relu(self.embedding(input)), states)
 
 
 class AttnDecoder(nn.Module):
@@ -90,7 +90,7 @@ class AttnDecoder(nn.Module):
         gru_out shape: $$(timesteps, batch, (num_directions=1)*hidden_size)$$
         '''
 
-        embedded = F.relu(self.embedding(input.view(-1, 1)), inplace=True)
+        embedded = F.relu(self.embedding(input.view(-1, 1)))
         # shape: batch, timestep=1, hidden_size
 
         info = torch.cat(

@@ -23,6 +23,7 @@ from torch.utils.data import DataLoader, Dataset
 from basic_models import AttnDecoder as Decoder
 from basic_models import Encoder
 from datasets import AmazonReviewDataset as ARDataset
+from datasets import AmazonSentenceDataset as ASDataset
 
 
 def short_reward(sentence, pad, sReward, on):
@@ -31,7 +32,7 @@ def short_reward(sentence, pad, sReward, on):
     '''
     batch = sentence.shape[1]
     reward = torch.zeros([batch], device=on)
-    pads = torch.tensor([pad]*batch, device=on)
+    pads = torch.tensor([pad] * batch, device=on)
 
     for i in range(int(sentence.shape[0])):
         reward += ((sentence[i] == pads).float())
@@ -86,7 +87,7 @@ class Storage:
         for (cState, nState, reward) in self.data:
             cQValue, _ = QFunc(*cState)
             nQValue, _ = QEval(*nState)
-            loss += QlossFunc(cQValue.max(-1)[0], reward+nQValue.max(-1)[0])
+            loss += QlossFunc(cQValue.max(-1)[0], reward + nQValue.max(-1)[0])
 
 
 class Dual(nn.Module):
@@ -114,7 +115,7 @@ class FullDecoder(nn.Module):
 
     def forward(self, *args, **kwargs):
         output, states = self.decoder(*args, **kwargs)
-        output = self.out_layer(F.relu(output, inplace=True))
+        output = self.out_layer(F.relu(output))
         return output, states
 
 
@@ -162,7 +163,7 @@ class G(nn.Module):
 
         encoded, states = self.encoder(sentence, states)
 
-        word = torch.tensor([self.sos]*batch, device=self.on)
+        word = torch.tensor([self.sos] * batch, device=self.on)
         shortened = []
 
         for _ in range(self.timesteps):
@@ -189,7 +190,7 @@ class D(nn.Module):
     def __init__(self, voc_size, hidden_size, timesteps, on, num_layers=5):
         super().__init__()
         self.encoder = Encoder(voc_size, hidden_size, num_layers)
-        self.score = nn.Linear(hidden_size*(num_layers+1), 1)
+        self.score = nn.Linear(hidden_size * (num_layers + 1), 1)
 
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -205,10 +206,10 @@ class D(nn.Module):
 
         gru_out, states = self.encoder(sentence, states)
 
-        gru_out = F.relu(gru_out[-1], inplace=True)
+        gru_out = F.relu(gru_out[-1])
 
         output = torch.cat([gru_out, states.view(
-            batch, (self.num_layers*self.hidden_size))], dim=-1)
+            batch, (self.num_layers * self.hidden_size))], dim=-1)
 
         output = self.score(output)
 
@@ -243,7 +244,7 @@ class R(nn.Module):
         encoded, states = self.encoder(shortened, states)
 
         original = []
-        word = torch.tensor([self.sos]*batch, device=self.on)
+        word = torch.tensor([self.sos] * batch, device=self.on)
 
         for _ in range(self.timesteps):
 
@@ -279,12 +280,12 @@ def train_one_batch(batched_data, D, GUpdate, GTarget, R,
                     epsilon, stepFunc, storage, sReward, sync=False, RTeacher=True):
 
     # train D
-    is_real = D(batched_data)
+    is_real = D(batched_data.clone())
     true_value = torch.ones_like(is_real, device=D.on)
 
     loss = DLossFunc(is_real, true_value)
 
-    generated = GUpdate(batched_data)
+    generated = GUpdate(batched_data.clone())
     is_fake = D(generated)
     false_value = torch.zeros_like(is_fake, device=D.on)
 
@@ -301,11 +302,11 @@ def train_one_batch(batched_data, D, GUpdate, GTarget, R,
 
     encoded, states = R.encoder(generated, states)
 
-    word = torch.tensor([R.sos]*batch, device=R.on)
+    word = torch.tensor([R.sos] * batch, device=R.on)
 
     loss = torch.tensor(0., device=R.on)
 
-    for batched_word in batched_data:
+    for batched_word in batched_data.clone():
         output, states = R.decoder(word, states, encoded)
         loss += RLossFunc(output.squeeze_(0), batched_word)
         word = batched_word if RTeacher else output.argmax(-1)
@@ -324,16 +325,17 @@ def train_one_batch(batched_data, D, GUpdate, GTarget, R,
     # train G
     # decoder of G is trained with RL
 
-    states = torch.zeros((GUpdate.num_layers, batch, GUpdate.hidden_size))
+    states = torch.zeros((GUpdate.num_layers, batch,
+                          GUpdate.hidden_size), device=GUpdate.on)
 
-    encoded, states = GUpdate.encoder(batched_data, states)
+    encoded, states = GUpdate.encoder(batched_data.clone(), states)
 
-    word = torch.tensor([GUpdate.sos]*batch, device=GUpdate.on)
+    word = torch.tensor([GUpdate.sos] * batch, device=GUpdate.on)
     shortened = []
     while True:
         step = stepFunc()
 
-        if not current_step+step < all_steps:
+        if not current_step + step < all_steps:
             step = all_steps - current_step
         cState = [word, states, encoded]
         action = word
@@ -348,12 +350,27 @@ def train_one_batch(batched_data, D, GUpdate, GTarget, R,
         word = action
 
         if not current_step + step < all_steps:
-            nState = [torch.tensor([GUpdate.pad]*batch,
+            nState = [torch.tensor([GUpdate.pad] * batch,
                                    device=GUpdate.on), states, encoded]
 
             shortened = torch.cat(shortened, dim=0)
-            reward = D(shortened) + \
+
+            states = torch.zeros(
+                (R.num_layers, batch, R.hidden_size), device=R.on)
+            encoded, states = R.encoder(shortened, states)
+            cross_entropy_loss = torch.tensor(0., device=R.on)
+
+            word = torch.tensor([R.sos] * batch, device=R.on)
+
+            for batched_word in batched_data.clone():
+                output, states = R.decoder(word, states, encoded)
+                cross_entropy_loss += RLossFunc(
+                    output.squeeze_(0), batched_word)
+                word = batched_word if RTeacher else output.argmax(-1)
+
+            reward = D(shortened) - cross_entropy_loss +\
                 short_reward(shortened, GUpdate.pad, sReward, GUpdate.on)
+
             break
 
         current_step += step
@@ -390,6 +407,10 @@ def test():
 
         def __getitem__(self, index):
             return self.data[index]
+
+        def to(self, device):
+            self.data = self.data.to(device)
+            return self
     voc_size = 233
     timesteps = 31
     batch = 311
@@ -399,15 +420,16 @@ def test():
     storage = Storage(0)
     step = Step(.5)
     sReward = 0
+    on = 'cuda'
     lr = 1e-3
     SOS = 0
     PAD = 1
-    dataset = TestDataset(0, voc_size, (timesteps, batch))
-    dis = D(voc_size, hidden_size, timesteps, on='cpu', num_layers=1)
-    gen = G(voc_size, hidden_size, timesteps, on='cpu',
-            sos_pad=(SOS, PAD), num_layers=num_layers)
-    rec = R(voc_size, hidden_size, timesteps,
-            on='cpu', sos=SOS, num_layers=num_layers)
+    dataset = TestDataset(0, voc_size, (timesteps, batch)).to(on)
+    dis = D(voc_size, hidden_size, timesteps, on=on, num_layers=1).to(on)
+    gen = G(voc_size, hidden_size, timesteps, on=on,
+            sos_pad=(SOS, PAD), num_layers=num_layers).to(on)
+    rec = R(voc_size, hidden_size, timesteps, on=on,
+            sos=SOS, num_layers=num_layers).to(on)
     do = optim.SGD(dis.parameters(), lr=lr)
     go = optim.SGD(gen.parameters(), lr=lr)
     ro = optim.SGD(rec.parameters(), lr=lr)
@@ -429,6 +451,7 @@ def main():
     parser.add_argument('-lr', '--lr', type=float, default=1e-3)
     parser.add_argument('-d', '--device', type=str, default='cpu')
     parser.add_argument('-r', '--reward', type=float, default=.005)
+    parser.add_argument('-S', '--sentence', action='store_true')
     parser.add_argument('-md', '--Mdecay', type=float, default=.25)
     parser.add_argument('-ed', '--Edecay', type=float, default=.0)
     parser.add_argument('-ep', '--epsilon', type=float, default=.1)
@@ -461,11 +484,19 @@ def main():
     weight_dir = args.weight_dir
     RTeacher = not args.selflearn
 
-    dataset = ARDataset(filename=json_file,
-                        threshold=threshold,
-                        batch_size=batch_size,
-                        device=device,
-                        on_gpu=on_gpu)
+    if args.sentence:
+        dataset = ASDataset(filename=json_file,
+                            threshold=threshold,
+                            batch_size=batch_size,
+                            timesteps=timesteps,
+                            device=device,
+                            on_gpu=on_gpu)
+    else:
+        dataset = ARDataset(filename=json_file,
+                            threshold=threshold,
+                            batch_size=batch_size,
+                            device=device,
+                            on_gpu=on_gpu)
 
     SOS = dataset.to_index('__SOS__')
     PAD = dataset.to_index('__PAD__')
@@ -518,7 +549,7 @@ def main():
 
     makedirs(weight_dir, exist_ok=True)
 
-    for epoch in range(1, 1+epochs):
+    for epoch in range(1, 1 + epochs):
         print('Epoch: {}/{}'.format(epoch, epochs))
         i = 0
         for batch in data_loader:
