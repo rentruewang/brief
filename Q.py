@@ -46,7 +46,7 @@ def select_value(QOutput, indexList):
     assert int(QOutput.shape[0]) == len(indexList)
 
     output = []
-    for batch, index in enumerate(range(len(indexList))):
+    for batch, index in enumerate(indexList):
         output.append(QOutput[batch, index])
     return torch.stack(output, dim=0)
 
@@ -58,7 +58,6 @@ def take_action(QFunc, states, epsilon, categorical=False):
     if random.uniform(low=0., high=1.) < epsilon():
         index = torch.randint(low=0, high=output.shape[-1],
                               size=[output.shape[0]])
-
     elif categorical:
         index = Categorical(F.softmax(output, dim=-1)).sample()
     else:
@@ -71,8 +70,8 @@ class Storage:
         self.decay_value = decay_value
         self.data = []
 
-    def save(self, cState, nState, reward):
-        self.data.append([cState, nState, reward])
+    def save(self, states, actions, rewards):
+        self.data.append([states, actions, rewards])
 
     def refresh(self):
         to_discard = []
@@ -83,11 +82,24 @@ class Storage:
             self.data.pop(index)
 
     def optimize(self, QFunc, Qoptim, QEval, QlossFunc, on):
-        loss = torch.tensor(0., device=on)
-        for (cState, nState, reward) in self.data:
-            cQValue, _ = QFunc(*cState)
-            nQValue, _ = QEval(*nState)
-            loss += QlossFunc(cQValue.max(-1)[0], reward + nQValue.max(-1)[0])
+        for S, action, reward in self.data:
+
+            loss = torch.tensor(0., device=on)
+            Q_values = []
+            for st, ac in zip(S[:-1], action):
+                output, _ = QFunc(*st)
+                Q_values.append(select_value(output.squeeze_(0), ac))
+            output, _ = QEval(*S[-1])
+            Q_values.append(output.squeeze_(0).max(-1)[0])
+
+            for i, r in enumerate(reward):
+                loss += QlossFunc(Q_values[i], r+Q_values[i+1])
+
+            Qoptim.zero_grad()
+            loss.backward(retain_graph=True)
+            # S carries information all the way back to encoder
+            # S = [action, states, gru_out]
+            Qoptim.step()
 
 
 class Dual(nn.Module):
@@ -169,7 +181,6 @@ class G(nn.Module):
         for _ in range(self.timesteps):
 
             distribution, states = self.QFunc(word, states, encoded)
-
             word = distribution.argmax(-1)
             shortened.append(word)
 
@@ -205,12 +216,10 @@ class D(nn.Module):
                               self.hidden_size), device=self.on)
 
         gru_out, states = self.encoder(sentence, states)
-
         gru_out = F.relu(gru_out[-1])
 
         output = torch.cat([gru_out, states.view(
             batch, (self.num_layers * self.hidden_size))], dim=-1)
-
         output = self.score(output)
 
         return F.sigmoid(output)
@@ -249,7 +258,6 @@ class R(nn.Module):
         for _ in range(self.timesteps):
 
             distribution, states = self.decoder(word, states, encoded)
-
             word = distribution.argmax(-1)
             original.append(word)
 
@@ -277,15 +285,16 @@ class Epsilon:
 def train_one_batch(batched_data, D, GUpdate, GTarget, R,
                     Doptim, Goptim, Roptim,
                     DLossFunc, GLossFunc, RLossFunc,
-                    epsilon, stepFunc, storage, sReward, sync=False, RTeacher=True):
+                    epsilon, stepFunc, storage, sReward,
+                    sync=False, RTeacher=True, categorical=False):
 
     # train D
-    is_real = D(batched_data.clone())
+    is_real = D(batched_data)
     true_value = torch.ones_like(is_real, device=D.on)
 
     loss = DLossFunc(is_real, true_value)
 
-    generated = GUpdate(batched_data.clone())
+    generated = GUpdate(batched_data)
     is_fake = D(generated)
     false_value = torch.zeros_like(is_fake, device=D.on)
 
@@ -303,10 +312,9 @@ def train_one_batch(batched_data, D, GUpdate, GTarget, R,
     encoded, states = R.encoder(generated, states)
 
     word = torch.tensor([R.sos] * batch, device=R.on)
-
     loss = torch.tensor(0., device=R.on)
 
-    for batched_word in batched_data.clone():
+    for batched_word in batched_data:
         output, states = R.decoder(word, states, encoded)
         loss += RLossFunc(output.squeeze_(0), batched_word)
         word = batched_word if RTeacher else output.argmax(-1)
@@ -319,7 +327,6 @@ def train_one_batch(batched_data, D, GUpdate, GTarget, R,
         GTarget.synchronise(GUpdate)
 
     all_steps = len(batched_data)
-
     current_step = 0
 
     # train G
@@ -327,60 +334,65 @@ def train_one_batch(batched_data, D, GUpdate, GTarget, R,
 
     states = torch.zeros((GUpdate.num_layers, batch,
                           GUpdate.hidden_size), device=GUpdate.on)
+    encoded, states = GUpdate.encoder(batched_data, states)
 
-    encoded, states = GUpdate.encoder(batched_data.clone(), states)
-
-    word = torch.tensor([GUpdate.sos] * batch, device=GUpdate.on)
+    word = torch.tensor([GUpdate.sos]*batch, device=GUpdate.on)
+    pad = torch.tensor([GUpdate.pad]*batch, device=GUpdate.on)
     shortened = []
+
     while True:
         step = stepFunc()
-
-        if not current_step + step < all_steps:
+        if current_step + step > all_steps:
             step = all_steps - current_step
-        cState = [word, states, encoded]
-        action = word
-        State = cState.copy()
+
+        states_list, reward_list, action_list = [], [], []
+        S = [word, states, encoded]
+        states_list.append(S)
 
         for _ in range(step):
-            action, states = take_action(GUpdate.QFunc, State, epsilon)
+            action, states = take_action(
+                GUpdate.QFunc, S, epsilon, categorical)
+            S = [action, states, encoded]
+            states_list.append(S)
+            reward_list.append(torch.tensor([0.]*batch, device=GUpdate.on))
+            action_list.append(action.squeeze_(0))
             shortened.append(action)
 
-        nState = [action, states, encoded]
-        reward = torch.tensor(0., device=GUpdate.on)
-        word = action
+        current_step += step
+        if current_step >= all_steps:
+            _, states = take_action(
+                GUpdate.QFunc, S, epsilon, categorical)
+            action_list.append(pad)
+            S = [action, states, encoded]
+            states_list.append(S)
 
-        if not current_step + step < all_steps:
-            nState = [torch.tensor([GUpdate.pad] * batch,
-                                   device=GUpdate.on), states, encoded]
+            shortened = torch.stack(shortened, dim=0)
+            loss = torch.tensor([0.]*batch, device=GUpdate.on)
 
-            shortened = torch.cat(shortened, dim=0)
+            s = torch.zeros((R.num_layers, batch, R.hidden_size), device=R.on)
+            Rencoded, s = R.encoder(shortened, s)
 
-            states = torch.zeros(
-                (R.num_layers, batch, R.hidden_size), device=R.on)
-            encoded, states = R.encoder(shortened, states)
-            cross_entropy_loss = torch.tensor(0., device=R.on)
+            word = torch.tensor([R.sos]*batch, device=R.on)
+            for B in batched_data:
+                output, s = R.decoder(word, s, Rencoded)
+                output.squeeze_(0)
+                for i in range(batch):
+                    loss[i] += RLossFunc(output[i:i+1], B[i:i+1])
+                word = B if RTeacher else output.argmax(-1)
 
-            word = torch.tensor([R.sos] * batch, device=R.on)
+            realistic = D(shortened).squeeze(-1)
+            short = short_reward(shortened, GUpdate.pad, sReward, GUpdate.on)
+            reward_list.append(realistic+short-loss)
 
-            for batched_word in batched_data.clone():
-                output, states = R.decoder(word, states, encoded)
-                cross_entropy_loss += RLossFunc(
-                    output.squeeze_(0), batched_word)
-                word = batched_word if RTeacher else output.argmax(-1)
-
-            reward = D(shortened) - cross_entropy_loss +\
-                short_reward(shortened, GUpdate.pad, sReward, GUpdate.on)
+            storage.save(states_list, action_list, reward_list)
+            storage.optimize(GUpdate.QFunc, Goptim,
+                             GTarget.QFunc, GLossFunc, GUpdate.on)
 
             break
 
-        current_step += step
-
-        storage.save(cState, nState, reward)
-
-    storage.optimize(GUpdate.QFunc, Goptim,
-                     GTarget.QFunc, GLossFunc, GUpdate.on)
-
-    storage.refresh()
+        storage.save(states_list, action_list, reward_list)
+        storage.optimize(GUpdate.QFunc, Goptim,
+                         GTarget.QFunc, GLossFunc, GUpdate.on)
 
 
 def predict(D=None, G=None, R=None, weight_dir=None, on='cpu'):
@@ -412,13 +424,13 @@ def test():
             self.data = self.data.to(device)
             return self
     voc_size = 233
-    timesteps = 31
+    timesteps = 13
     batch = 311
     hidden_size = 141
     num_layers = 2
     epsilon = Epsilon(0, 0)
     storage = Storage(0)
-    step = Step(.5)
+    step = Step(1)
     sReward = 0
     on = 'cuda'
     lr = 1e-3
@@ -562,7 +574,8 @@ def main():
                             Doptim=dis_optim, Goptim=gen_optim, Roptim=rec_optim,
                             DLossFunc=dis_loss, GLossFunc=gen_loss, RLossFunc=rec_loss,
                             epsilon=epsilon, stepFunc=step, storage=storage,
-                            sReward=sReward, sync=sync, RTeacher=RTeacher)
+                            sReward=sReward, sync=sync, RTeacher=RTeacher,
+                            categorical=categorical)
 
         torch.save(obj=dis.state_dict(),
                    f=join(weight_dir, 'Discriminator_{:03d}.pth'.format(epoch)))
