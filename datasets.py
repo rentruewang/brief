@@ -69,14 +69,11 @@ class AmazonReviewDataset(Dataset):
         print('processed')
 
         self.pair = Pair(threshold)
-
         for word in text.split(' '):
             self.pair += word
-
         self.pair.build()
 
         self.on_gpu = on_gpu
-
         self.device = device
 
         self.text = self.to_tensor(text, batch_size)
@@ -125,7 +122,6 @@ class AmazonReviewDataset(Dataset):
 
         tensor_list = pad_sequence(
             tensor_list, padding_value=self.pair._to_index['__PAD__'])
-
         return tensor_list
 
     @property
@@ -171,14 +167,11 @@ class AmazonSentenceDataset(Dataset):
         print('processed')
 
         self.pair = Pair(threshold)
-
         for word in (' '.join(text)).split(' '):
             self.pair += word
-
         self.pair.build()
 
         self.on_gpu = on_gpu
-
         self.device = device
 
         self.text = self.sentence_tensor(text, timesteps, batch_size)
@@ -232,10 +225,8 @@ class AmazonSentenceDataset(Dataset):
             tensor_list.append(sentences_t[:, i:i+batch_size])
 
         tensor_list = torch.cat(tensor_list, dim=0)
-
         if self.on_gpu:
             tensor_list = tensor_list.to(self.device)
-
         return tensor_list
 
     @property
@@ -256,3 +247,125 @@ class AmazonSentenceDataset(Dataset):
         self.device = device
         if self.on_gpu:
             self.text = self.text.to(device)
+
+
+class AmazonFullDataset(Dataset):
+    '''
+    returns a sentene along with its score and summary
+    '''
+
+    def __init__(self,
+                 filename,
+                 threshold,
+                 batch_size,
+                 timesteps,
+                 device,
+                 on_gpu=False,
+                 full=False):
+
+        def process(string):
+            string = re.sub(pattern="[a-z]*&.;", repl=' ', string=string)
+
+            replaced_chars = ["\\", "\n"]
+            special_chars = ["...", ',', "'", '"', '(', ')', '.']
+
+            for char in replaced_chars:
+                string = string.replace(char, ' ')
+
+            string = string.replace('!', '.')
+
+            for char in special_chars:
+                string = string.replace(char, ' ' + char + ' ')
+
+            string = string.replace('. .', ' . ')
+
+            return (string.strip() + ' .').replace('. .', '.').replace('  ', ' ')
+
+        def pad(sentence, timesteps, pad_val):
+            sentence = sentence[:timesteps]
+
+            l = len(sentence)
+            for _ in range(timesteps-l):
+                sentence.append(pad_val)
+            return sentence
+
+        super().__init__()
+        with open(expanduser(filename)) as file:
+            try:
+                data = json.load(file)
+            except json.JSONDecodeError:
+                file.seek(0)
+                data = [json.loads(l) for l in file.readlines()]
+
+        review_text = [d['reviewText'] for d in data]
+        review_summary = [d['summary'] for d in data]
+        overall_score = [d['overall'] for d in data]
+
+        review_text = [process(text) for text in review_text]
+        review_summary = [process(s) for s in review_summary]
+
+        for i in range(len(review_text)):
+            r = review_text[i]
+            review_text[i] = [t.strip()+' .' for t in r.split('.')
+                              if len(t) != 0]
+
+        self.pair = Pair(threshold)
+
+        for t, s in zip(review_text, review_summary):
+            for sentence in t:
+                for word in sentence.split(' '):
+                    self.pair += word
+            for word in s.split(' '):
+                self.pair += word
+
+        self.pair.build()
+
+        text, summ = [], []
+        for t, s in zip(review_text, review_summary):
+            ss = []
+            for sentence in t:
+                sen = []
+                for word in sentence.split(' '):
+                    sen.append(self.pair.to_index(word))
+                ss.append(sen)
+            text.append(ss)
+            ss = []
+            for word in s.split(' '):
+                ss.append(self.pair.to_index(word))
+            summ.append(ss)
+
+        text_list = []
+        for tl in text:
+            same_origin = []
+            for t in tl:
+                same_origin.append(
+                    pad(t, timesteps, self.pair._to_index['__PAD__']))
+            text_list.append(same_origin)
+        summ_list = []
+        for s in summ:
+            summ_list.append(
+                pad(s, timesteps, self.pair._to_index['__PAD__']))
+
+        self.text = [torch.tensor(t, dtype=torch.long) for t in text_list]
+        self.summ = torch.tensor(summ_list, dtype=torch.long)
+        self.overall = torch.tensor(overall_score, dtype=torch.float)
+        assert len(self.text) == len(self.summ) == len(self.overall)
+
+        self.device = device
+        self.on_gpu = on_gpu
+        if on_gpu:
+            self.text = [tensor.to(device) for tensor in self.text]
+            self.summ = self.summ.to(device)
+            self.overall = self.overall.to(device)
+
+    def __len__(self):
+        return len(self.overall)
+
+    def __getitem__(self, index):
+        rand = random.randint(low=0, high=len(self.text[index]))
+        if self.on_gpu:
+            return (self.text[index][rand], self.summ[index], self.overall[index])
+        else:
+            return (self.text[index][rand].to(self.device),
+                    self.summ[index].to(self.device),
+                    self.overall[index].to(self.device))
