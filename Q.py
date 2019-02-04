@@ -22,6 +22,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from basic_models import AttnDecoder as Decoder
 from basic_models import Encoder
+from datasets import AmazonFullDataset as AFDataset
 from datasets import AmazonReviewDataset as ARDataset
 from datasets import AmazonSentenceDataset as ASDataset
 
@@ -66,9 +67,12 @@ def take_action(QFunc, states, epsilon, categorical=False):
 
 
 class Storage:
-    def __init__(self, decay_value):
+    def __init__(self, decay_value, multistep=True, tdlambda=-1):
         self.decay_value = decay_value
         self.data = []
+        self.multistep = multistep
+        self.tdlambda = tdlambda
+        assert tdlambda < 1
 
     def save(self, states, actions, rewards):
         self.data.append([states, actions, rewards])
@@ -82,24 +86,62 @@ class Storage:
             self.data.pop(index)
 
     def optimize(self, QFunc, Qoptim, QEval, QlossFunc, on):
-        for S, action, reward in self.data:
+        if self.tdlambda > 0:
+            for S, action, reward in self.data:
+                loss = torch.tensor(0., device=on)
+                Q_values = []
+                for st, ac in zip(S[:-1], action):
+                    output, _ = QFunc(*st)
+                    Q_values.append(select_value(output.squeeze_(0), ac))
+                Q_NSval = []
+                for st, ac in zip(S[1:], action):
+                    output, _ = QEval(*st)
+                    Q_NSval.append(output.squeeze_(0).max(-1)[0])
 
-            loss = torch.tensor(0., device=on)
-            Q_values = []
-            for st, ac in zip(S[:-1], action):
-                output, _ = QFunc(*st)
-                Q_values.append(select_value(output.squeeze_(0), ac))
-            output, _ = QEval(*S[-1])
-            Q_values.append(output.squeeze_(0).max(-1)[0])
+                coefficient = 1
+                for Q, next_Q, rew in zip(Q_values[:-1], Q_NSval[:-1], reward[:-1]):
+                    loss += coefficient*QlossFunc(Q, rew+next_Q)
+                    coefficient *= self.tdlambda
+                loss *= (1-self.tdlambda)
+                loss += coefficient*QlossFunc(Q[-1], reward[-1]+Q_NSval[-1])
 
-            for i, r in enumerate(reward):
-                loss += QlossFunc(Q_values[i], r+Q_values[i+1])
+                Qoptim.zero_grad()
+                loss.backward(retain_graph=True)
+                # S carries information all the way back to encoder
+                # S = [action, states, gru_out]
+                Qoptim.step()
+        elif self.multistep:
+            for S, action, reward in self.data:
+                output, _ = QFunc(*S[0])
+                Q_value = select_value(output.squeeze_(0), action[0])
+                Q_NSval, _ = QEval(*S[-1])
+                Q_NSval = Q_NSval.squeeze_(0).max(-1)[0]
+                r = sum(reward)
+                loss = QlossFunc(Q_value, r+Q_NSval)
 
-            Qoptim.zero_grad()
-            loss.backward(retain_graph=True)
-            # S carries information all the way back to encoder
-            # S = [action, states, gru_out]
-            Qoptim.step()
+                Qoptim.zero_grad()
+                loss.backward(retain_graph=True)
+                # S carries information all the way back to encoder
+                # S = [action, states, gru_out]
+                Qoptim.step()
+        else:
+            for S, action, reward in self.data:
+                loss = torch.tensor(0., device=on)
+                Q_values = []
+                for st, ac in zip(S[:-1], action):
+                    output, _ = QFunc(*st)
+                    Q_values.append(select_value(output.squeeze_(0), ac))
+                output, _ = QEval(*S[-1])
+                Q_values.append(output.squeeze_(0).max(-1)[0])
+
+                for i, r in enumerate(reward):
+                    loss += QlossFunc(Q_values[i], r+Q_values[i+1])
+
+                Qoptim.zero_grad()
+                loss.backward(retain_graph=True)
+                # S carries information all the way back to encoder
+                # S = [action, states, gru_out]
+                Qoptim.step()
 
 
 class Dual(nn.Module):
@@ -146,7 +188,7 @@ class Q(nn.Module):
 
 class G(nn.Module):
     '''
-    takes an unfinished sentence, evaluate the best choice {first char: SOS}
+    takes an unfinished sentence, evaluate the best choice 
     1 trained independently using generator as reward
     2 trained with R as a VAE module
     '''
@@ -193,7 +235,7 @@ class G(nn.Module):
 
 class D(nn.Module):
     '''
-    takes a sentence, determine if it's real (1) or generated (0) {first char: normal char}
+    takes a sentence, determine if it's real (1) or generated (0)
     1 trained on real text
     2 trained on generated text
     '''
@@ -264,6 +306,40 @@ class R(nn.Module):
         return torch.cat(original, dim=0)
 
 
+class S(nn.Module):
+    '''
+    takes a sentence, determine its score 
+    1 trained on real text
+    2 trained on generated text
+    '''
+
+    def __init__(self, voc_size, hidden_size, timesteps, on, num_layers=5):
+        super().__init__()
+        self.encoder = Encoder(voc_size, hidden_size, num_layers)
+        self.score = nn.Linear(hidden_size * (num_layers + 1), 5)
+
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.on = on
+
+    def forward(self, sentence):
+        '''
+        sentence: a batch of timesteps -> shape: timesteps, batch
+        '''
+        batch = sentence.shape[1]
+        states = torch.zeros((self.num_layers, batch,
+                              self.hidden_size), device=self.on)
+
+        gru_out, states = self.encoder(sentence, states)
+        gru_out = F.relu(gru_out[-1])
+
+        output = torch.cat([gru_out, states.view(
+            batch, (self.num_layers * self.hidden_size))], dim=-1)
+        output = self.score(output)
+
+        return F.softmax(output, -1)
+
+
 class Step:
     def __init__(self, E):
         self.E = E
@@ -331,7 +407,6 @@ def train_one_batch(batched_data, D, GUpdate, GTarget, R,
 
     # train G
     # decoder of G is trained with RL
-
     states = torch.zeros((GUpdate.num_layers, batch,
                           GUpdate.hidden_size), device=GUpdate.on)
     encoded, states = GUpdate.encoder(batched_data, states)
@@ -395,6 +470,127 @@ def train_one_batch(batched_data, D, GUpdate, GTarget, R,
                          GTarget.QFunc, GLossFunc, GUpdate.on)
 
 
+def F_train_one_batch(batched_data, D, GUpdate, GTarget, R, S,
+                      Doptim, Goptim, Roptim, Soptim,
+                      DLossFunc, GLossFunc, RLossFunc, SLossFunc,
+                      epsilon, stepFunc, storage, sReward,
+                      sync=False, RTeacher=True, categorical=False):
+
+    sentences, summaries, scores = batched_data
+    '''
+    sentences: a batch of sentences with normal ordering -> shape: batch, timesteps
+    summaries: a batch of sentences with normal ordering -> shape: batch, timesteps
+    scores: a batch of scores -> shape: batch
+    '''
+    sentences = sentences.permute(1, 0)
+    summaries = summaries.permute(1, 0)
+
+    # train D
+    is_real = D(sentences)
+    true_value = torch.ones_like(is_real, device=D.on)
+
+    RLoss = DLossFunc(is_real, true_value)
+
+    generated = GUpdate(sentences)
+    is_fake = D(generated)
+    false_value = torch.zeros_like(is_fake, device=D.on)
+
+    RLoss += DLossFunc(is_fake, false_value)
+
+    Doptim.zero_grad()
+    RLoss.backward()
+    Doptim.step()
+
+    # train R
+    # teacher forcing
+    batch = sentences.shape[1]
+    states = torch.zeros((R.num_layers, batch, R.hidden_size), device=R.on)
+
+    encoded, states = R.encoder(generated, states)
+
+    word = torch.tensor([R.sos] * batch, device=R.on)
+    RLoss = torch.tensor(0., device=R.on)
+
+    for batched_word in sentences:
+        output, states = R.decoder(word, states, encoded)
+        RLoss += RLossFunc(output.squeeze_(0), batched_word)
+        word = batched_word if RTeacher else output.argmax(-1)
+
+    Roptim.zero_grad()
+    RLoss.backward()
+    Roptim.step()
+
+    if sync:
+        GTarget.synchronise(GUpdate)
+
+    all_steps = len(sentences)
+    current_step = 0
+
+    # train G
+    # decoder of G is trained with RL
+    states = torch.zeros((GUpdate.num_layers, batch,
+                          GUpdate.hidden_size), device=GUpdate.on)
+    encoded, states = GUpdate.encoder(sentences, states)
+
+    word = torch.tensor([GUpdate.sos]*batch, device=GUpdate.on)
+    pad = torch.tensor([GUpdate.pad]*batch, device=GUpdate.on)
+    shortened = []
+
+    while True:
+        step = stepFunc()
+        if current_step + step > all_steps:
+            step = all_steps - current_step
+
+        states_list, reward_list, action_list = [], [], []
+        S = [word, states, encoded]
+        states_list.append(S)
+
+        for _ in range(step):
+            action, states = take_action(
+                GUpdate.QFunc, S, epsilon, categorical)
+            S = [action, states, encoded]
+            states_list.append(S)
+            reward_list.append(torch.tensor([0.]*batch, device=GUpdate.on))
+            action_list.append(action.squeeze_(0))
+            shortened.append(action)
+
+        current_step += step
+        if current_step >= all_steps:
+            _, states = take_action(
+                GUpdate.QFunc, S, epsilon, categorical)
+            action_list.append(pad)
+            S = [action, states, encoded]
+            states_list.append(S)
+
+            shortened = torch.stack(shortened, dim=0)
+            RLoss = torch.tensor([0.]*batch, device=GUpdate.on)
+
+            s = torch.zeros((R.num_layers, batch, R.hidden_size), device=R.on)
+            Rencoded, s = R.encoder(shortened, s)
+
+            word = torch.tensor([R.sos]*batch, device=R.on)
+            for B in sentences:
+                output, s = R.decoder(word, s, Rencoded)
+                output.squeeze_(0)
+                for i in range(batch):
+                    RLoss[i] += RLossFunc(output[i:i+1], B[i:i+1])
+                word = B if RTeacher else output.argmax(-1)
+
+            realistic = D(shortened).squeeze(-1)
+            short = short_reward(shortened, GUpdate.pad, sReward, GUpdate.on)
+            reward_list.append(realistic+short-RLoss)
+
+            storage.save(states_list, action_list, reward_list)
+            storage.optimize(GUpdate.QFunc, Goptim,
+                             GTarget.QFunc, GLossFunc, GUpdate.on)
+
+            break
+
+        storage.save(states_list, action_list, reward_list)
+        storage.optimize(GUpdate.QFunc, Goptim,
+                         GTarget.QFunc, GLossFunc, GUpdate.on)
+
+
 def predict(D=None, G=None, R=None, weight_dir=None, on='cpu'):
     if all([D, G, R]):
         pass
@@ -429,10 +625,10 @@ def test():
     hidden_size = 141
     num_layers = 2
     epsilon = Epsilon(0, 0)
-    storage = Storage(0)
+    storage = Storage(0, multistep=True, tdlambda=.9)
     step = Step(1)
     sReward = 0
-    on = 'cuda'
+    on = 'cuda' if cuda.is_available() else 'cpu'
     lr = 1e-3
     SOS = 0
     PAD = 1
@@ -445,6 +641,7 @@ def test():
     do = optim.SGD(dis.parameters(), lr=lr)
     go = optim.SGD(gen.parameters(), lr=lr)
     ro = optim.SGD(rec.parameters(), lr=lr)
+    print(dataset[:].shape)
     train_one_batch(dataset[:], dis, gen, gen, rec,
                     do, go, ro,
                     F.binary_cross_entropy, F.mse_loss, F.cross_entropy,
@@ -464,6 +661,7 @@ def main():
     parser.add_argument('-d', '--device', type=str, default='cpu')
     parser.add_argument('-r', '--reward', type=float, default=.005)
     parser.add_argument('-S', '--sentence', action='store_true')
+    parser.add_argument('-F', '--full', action='store_true')
     parser.add_argument('-md', '--Mdecay', type=float, default=.25)
     parser.add_argument('-ed', '--Edecay', type=float, default=.0)
     parser.add_argument('-ep', '--epsilon', type=float, default=.1)
@@ -473,6 +671,8 @@ def main():
     parser.add_argument('-p', '--predict', type=str, default='')
     parser.add_argument('-W', '--weight_dir', type=str, default='weight_dir')
     parser.add_argument('-sl', '--selflearn', action='store_true')
+    parser.add_argument('-ss', '--singlestep', action='store_true')
+    parser.add_argument('-tdl', '--tdlambda', type=float, default=-1)
     parser.add_argument('--off_gpu', action='store_true')
     args = parser.parse_args()
 
@@ -482,6 +682,7 @@ def main():
     hidden_size = args.hidden
     timesteps = args.timesteps
     threshold = args.threshold
+    full = args.full
     lr = args.lr
     sReward = args.reward
     step_E = args.step
@@ -493,32 +694,51 @@ def main():
     epsilon_0 = args.epsilon
     categorical = args.categorical
     syncOn = args.sync
+    multistep = not args.singlestep
+    tdlambda = args.tdlambda
     weight_dir = args.weight_dir
     RTeacher = not args.selflearn
 
-    if args.sentence:
-        dataset = ASDataset(filename=json_file,
+    if full:
+        '''
+        if full:
+            data is not transposed: shape -> batch, timesteps
+        else:
+            data is transposed: shape -> timesteps, batch
+        '''
+
+        dataset = AFDataset(filename=json_file,
                             threshold=threshold,
-                            batch_size=batch_size,
                             timesteps=timesteps,
                             device=device,
                             on_gpu=on_gpu)
+        data_loader = DataLoader(dataset,
+                                 batch_size=batch_size,
+                                 shuffle=True,
+                                 drop_last=True)
     else:
-        dataset = ARDataset(filename=json_file,
-                            threshold=threshold,
-                            batch_size=batch_size,
-                            device=device,
-                            on_gpu=on_gpu)
+        if args.sentence:
+            dataset = ASDataset(filename=json_file,
+                                threshold=threshold,
+                                batch_size=batch_size,
+                                timesteps=timesteps,
+                                device=device,
+                                on_gpu=on_gpu)
+        else:
+            dataset = ARDataset(filename=json_file,
+                                threshold=threshold,
+                                batch_size=batch_size,
+                                device=device,
+                                on_gpu=on_gpu)
+        data_loader = DataLoader(dataset,
+                                 batch_size=timesteps,
+                                 shuffle=True,
+                                 drop_last=True)
 
     SOS = dataset.to_index('__SOS__')
     PAD = dataset.to_index('__PAD__')
 
     voc_size = dataset.size
-
-    data_loader = DataLoader(dataset,
-                             batch_size=timesteps,
-                             shuffle=True,
-                             drop_last=True)
 
     dis = D(voc_size=voc_size,
             hidden_size=hidden_size,
@@ -555,9 +775,18 @@ def main():
     gen_loss = nn.SmoothL1Loss()
     rec_loss = nn.CrossEntropyLoss()
 
+    if full:
+        scr = S(voc_size=voc_size,
+                hidden_size=hidden_size,
+                timesteps=timesteps,
+                num_layers=num_layers,
+                on=device)
+        scr_optim = optim.RMSprop(params=scr.parameters(), lr=lr)
+        scr_loss = nn.CrossEntropyLoss()
+
     epsilon = Epsilon(epsilon_0, epsilon_decay)
     step = Step(E=step_E)
-    storage = Storage(memory_decay)
+    storage = Storage(memory_decay, multistep=multistep, tdlambda=tdlambda)
 
     makedirs(weight_dir, exist_ok=True)
 
@@ -568,14 +797,22 @@ def main():
             i %= syncOn
             sync = (i == 0)
             i += 1
-
-            train_one_batch(batched_data=batch,
-                            D=D, GUpdate=gen_update, GTarget=gen_target, R=R,
-                            Doptim=dis_optim, Goptim=gen_optim, Roptim=rec_optim,
-                            DLossFunc=dis_loss, GLossFunc=gen_loss, RLossFunc=rec_loss,
-                            epsilon=epsilon, stepFunc=step, storage=storage,
-                            sReward=sReward, sync=sync, RTeacher=RTeacher,
-                            categorical=categorical)
+            if full:
+                F_train_one_batch(batched_data=batch,
+                                  D=dis, GUpdate=gen_update, GTarget=gen_target, R=rec, S=scr,
+                                  Doptim=dis_optim, Goptim=gen_optim, Roptim=rec_optim, Soptim=scr_optim,
+                                  DLossFunc=dis_loss, GLossFunc=gen_loss, RLossFunc=rec_loss, SLossFunc=scr_loss,
+                                  epsilon=epsilon, stepFunc=step, storage=storage,
+                                  sReward=sReward, sync=sync, RTeacher=RTeacher,
+                                  categorical=categorical)
+            else:
+                train_one_batch(batched_data=batch,
+                                D=dis, GUpdate=gen_update, GTarget=gen_target, R=rec,
+                                Doptim=dis_optim, Goptim=gen_optim, Roptim=rec_optim,
+                                DLossFunc=dis_loss, GLossFunc=gen_loss, RLossFunc=rec_loss,
+                                epsilon=epsilon, stepFunc=step, storage=storage,
+                                sReward=sReward, sync=sync, RTeacher=RTeacher,
+                                categorical=categorical)
 
         torch.save(obj=dis.state_dict(),
                    f=join(weight_dir, 'Discriminator_{:03d}.pth'.format(epoch)))
@@ -591,6 +828,12 @@ def main():
         torch.save(obj=rec.state_dict(),
                    f=join(weight_dir, 'Reconstructor.pth'))
 
+        if full:
+            torch.save(obj=scr.state_dict(),
+                       f=join(weight_dir, 'ScorePredict_{:03d}.pth'.format(epoch)))
+            torch.save(obj=scr.state_dict(),
+                       f=join(weight_dir, 'ScorePredict.pth'))
 
-# test()
-main()
+
+test()
+# main()

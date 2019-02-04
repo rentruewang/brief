@@ -257,7 +257,6 @@ class AmazonFullDataset(Dataset):
     def __init__(self,
                  filename,
                  threshold,
-                 batch_size,
                  timesteps,
                  device,
                  on_gpu=False,
@@ -348,7 +347,7 @@ class AmazonFullDataset(Dataset):
 
         self.text = [torch.tensor(t, dtype=torch.long) for t in text_list]
         self.summ = torch.tensor(summ_list, dtype=torch.long)
-        self.overall = torch.tensor(overall_score, dtype=torch.float)
+        self.overall = torch.tensor(overall_score, dtype=torch.long)
         assert len(self.text) == len(self.summ) == len(self.overall)
 
         self.device = device
