@@ -86,7 +86,7 @@ class Storage:
             self.data.pop(index)
 
     def optimize(self, QFunc, Qoptim, QEval, QlossFunc, on):
-        if self.tdlambda > 0:
+        if self.tdlambda >= 0:
             for S, action, reward in self.data:
                 loss = torch.tensor(0., device=on)
                 Q_values = []
@@ -103,7 +103,8 @@ class Storage:
                     loss += coefficient*QlossFunc(Q, rew+next_Q)
                     coefficient *= self.tdlambda
                 loss *= (1-self.tdlambda)
-                loss += coefficient*QlossFunc(Q[-1], reward[-1]+Q_NSval[-1])
+                loss += coefficient * \
+                    QlossFunc(Q_values[-1], reward[-1]+Q_NSval[-1])
 
                 Qoptim.zero_grad()
                 loss.backward(retain_graph=True)
@@ -188,7 +189,7 @@ class Q(nn.Module):
 
 class G(nn.Module):
     '''
-    takes an unfinished sentence, evaluate the best choice 
+    takes an unfinished sentence, evaluate the best choice
     1 trained independently using generator as reward
     2 trained with R as a VAE module
     '''
@@ -308,7 +309,7 @@ class R(nn.Module):
 
 class S(nn.Module):
     '''
-    takes a sentence, determine its score 
+    takes a sentence, determine its score
     1 trained on real text
     2 trained on generated text
     '''
@@ -486,20 +487,40 @@ def F_train_one_batch(batched_data, D, GUpdate, GTarget, R, S,
     summaries = summaries.permute(1, 0)
 
     # train D
+    DLoss = torch.tensor(0., device=D.on)
+
     is_real = D(sentences)
     true_value = torch.ones_like(is_real, device=D.on)
 
-    RLoss = DLossFunc(is_real, true_value)
+    DLoss += DLossFunc(is_real, true_value)
+
+    is_real = D(summaries)
+    true_value = torch.ones_like(is_real, device=D.on)
+
+    DLoss += DLossFunc(is_real, true_value)
 
     generated = GUpdate(sentences)
     is_fake = D(generated)
     false_value = torch.zeros_like(is_fake, device=D.on)
 
-    RLoss += DLossFunc(is_fake, false_value)
+    DLoss += DLossFunc(is_fake, false_value)
 
     Doptim.zero_grad()
-    RLoss.backward()
+    DLoss.backward()
     Doptim.step()
+
+    # train S
+    SLoss = torch.tensor(0., device=S.on)
+
+    predicted = S(sentences)
+    SLoss += SLossFunc(predicted, scores)
+
+    predicted = S(summaries)
+    SLoss += SLossFunc(predicted, scores)
+
+    Soptim.zero_grad()
+    SLoss.backward()
+    Soptim.step()
 
     # train R
     # teacher forcing
@@ -512,9 +533,9 @@ def F_train_one_batch(batched_data, D, GUpdate, GTarget, R, S,
     RLoss = torch.tensor(0., device=R.on)
 
     for batched_word in sentences:
-        output, states = R.decoder(word, states, encoded)
-        RLoss += RLossFunc(output.squeeze_(0), batched_word)
-        word = batched_word if RTeacher else output.argmax(-1)
+        Routput, states = R.decoder(word, states, encoded)
+        RLoss += RLossFunc(Routput.squeeze_(0), batched_word)
+        word = batched_word if RTeacher else Routput.argmax(-1)
 
     Roptim.zero_grad()
     RLoss.backward()
@@ -542,14 +563,14 @@ def F_train_one_batch(batched_data, D, GUpdate, GTarget, R, S,
             step = all_steps - current_step
 
         states_list, reward_list, action_list = [], [], []
-        S = [word, states, encoded]
-        states_list.append(S)
+        STATES = [word, states, encoded]
+        states_list.append(STATES)
 
         for _ in range(step):
             action, states = take_action(
-                GUpdate.QFunc, S, epsilon, categorical)
-            S = [action, states, encoded]
-            states_list.append(S)
+                GUpdate.QFunc, STATES, epsilon, categorical)
+            STATES = [action, states, encoded]
+            states_list.append(STATES)
             reward_list.append(torch.tensor([0.]*batch, device=GUpdate.on))
             action_list.append(action.squeeze_(0))
             shortened.append(action)
@@ -557,10 +578,10 @@ def F_train_one_batch(batched_data, D, GUpdate, GTarget, R, S,
         current_step += step
         if current_step >= all_steps:
             _, states = take_action(
-                GUpdate.QFunc, S, epsilon, categorical)
+                GUpdate.QFunc, STATES, epsilon, categorical)
             action_list.append(pad)
-            S = [action, states, encoded]
-            states_list.append(S)
+            STATES = [action, states, encoded]
+            states_list.append(STATES)
 
             shortened = torch.stack(shortened, dim=0)
             RLoss = torch.tensor([0.]*batch, device=GUpdate.on)
@@ -570,15 +591,20 @@ def F_train_one_batch(batched_data, D, GUpdate, GTarget, R, S,
 
             word = torch.tensor([R.sos]*batch, device=R.on)
             for B in sentences:
-                output, s = R.decoder(word, s, Rencoded)
-                output.squeeze_(0)
+                Routput, s = R.decoder(word, s, Rencoded)
+                Routput.squeeze_(0)
                 for i in range(batch):
-                    RLoss[i] += RLossFunc(output[i:i+1], B[i:i+1])
-                word = B if RTeacher else output.argmax(-1)
+                    RLoss[i] += RLossFunc(Routput[i:i+1], B[i:i+1])
+                word = B if RTeacher else Routput.argmax(-1)
+
+            SLoss = torch.tensor([0.]*batch, device=GUpdate.on)
+            P_scores = S(shortened)
+            for i in range(batch):
+                SLoss[i] = SLossFunc(P_scores[i:i+1], scores[i:i+1])
 
             realistic = D(shortened).squeeze(-1)
             short = short_reward(shortened, GUpdate.pad, sReward, GUpdate.on)
-            reward_list.append(realistic+short-RLoss)
+            reward_list.append(realistic+short-RLoss-SLoss)
 
             storage.save(states_list, action_list, reward_list)
             storage.optimize(GUpdate.QFunc, Goptim,
@@ -602,10 +628,45 @@ def predict(D=None, G=None, R=None, weight_dir=None, on='cpu'):
         R = torch.load(f=join(weight_dir, 'Reconstructor.pth'),
                        map_location=on)
     else:
-        raise ValueError
+        raise FileNotFoundError
 
 
 def test():
+    voc_size = 233
+    timesteps = 13
+    batch = 311
+    hidden_size = 141
+    num_layers = 2
+    epsilon = Epsilon(0, 0)
+    storage = Storage(0, multistep=True, tdlambda=.9)
+    step = Step(1)
+    sReward = 0
+    on = 'cuda' if cuda.is_available() else 'cpu'
+    print('on: {}'.format(on))
+    lr = 1e-3
+    SOS = 0
+    PAD = 1
+    dis = D(voc_size, hidden_size, timesteps, on=on, num_layers=1).to(on)
+    gen = G(voc_size, hidden_size, timesteps, on=on,
+            sos_pad=(SOS, PAD), num_layers=num_layers).to(on)
+    rec = R(voc_size, hidden_size, timesteps, on=on,
+            sos=SOS, num_layers=num_layers).to(on)
+    scr = S(voc_size, hidden_size, timesteps, on=on, num_layers=1).to(on)
+    do = optim.SGD(dis.parameters(), lr=lr)
+    go = optim.SGD(gen.parameters(), lr=lr)
+    ro = optim.SGD(rec.parameters(), lr=lr)
+    so = optim.SGD(scr.parameters(), lr=lr)
+    print('F')
+    F_train_one_batch((torch.randint(0, voc_size, (batch, timesteps)).to(on),
+                       torch.randint(
+        0, voc_size, (batch, timesteps)).to(on),
+        torch.randint(0, 5, (batch,)).to(on)),
+        dis, gen, gen, rec, scr,
+        do, go, ro, so,
+        F.binary_cross_entropy, F.mse_loss, F.cross_entropy, F.cross_entropy,
+        epsilon, step, storage, sReward, 'weight')
+    print('N')
+
     class TestDataset(Dataset):
         def __init__(self, low, high, shape):
             self.data = torch.randint(low, high, shape)
@@ -619,28 +680,7 @@ def test():
         def to(self, device):
             self.data = self.data.to(device)
             return self
-    voc_size = 233
-    timesteps = 13
-    batch = 311
-    hidden_size = 141
-    num_layers = 2
-    epsilon = Epsilon(0, 0)
-    storage = Storage(0, multistep=True, tdlambda=.9)
-    step = Step(1)
-    sReward = 0
-    on = 'cuda' if cuda.is_available() else 'cpu'
-    lr = 1e-3
-    SOS = 0
-    PAD = 1
     dataset = TestDataset(0, voc_size, (timesteps, batch)).to(on)
-    dis = D(voc_size, hidden_size, timesteps, on=on, num_layers=1).to(on)
-    gen = G(voc_size, hidden_size, timesteps, on=on,
-            sos_pad=(SOS, PAD), num_layers=num_layers).to(on)
-    rec = R(voc_size, hidden_size, timesteps, on=on,
-            sos=SOS, num_layers=num_layers).to(on)
-    do = optim.SGD(dis.parameters(), lr=lr)
-    go = optim.SGD(gen.parameters(), lr=lr)
-    ro = optim.SGD(rec.parameters(), lr=lr)
     print(dataset[:].shape)
     train_one_batch(dataset[:], dis, gen, gen, rec,
                     do, go, ro,
