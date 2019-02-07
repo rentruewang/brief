@@ -27,6 +27,31 @@ from datasets import AmazonReviewDataset as ARDataset
 from datasets import AmazonSentenceDataset as ASDataset
 
 
+def ROUGE(inputs, reference, pad, N=1):
+    '''
+    input and reference are both numpy arrays shape: -> timesteps
+    '''
+    inputs = [i for i in inputs if i != pad]
+    reference = [r for r in reference if r != pad]
+
+    inp_grams = []
+    ref_grams = []
+
+    for i in range(len(inputs)-N+1):
+        inp_grams.append(inputs[i:i+N])
+
+    for i in range(len(reference)-N+1):
+        ref_grams.append(reference[i:i+N])
+
+    count = 0
+
+    for t in inp_grams:
+        if t in ref_grams:
+            count += 1
+
+    return count/len(ref_grams)
+
+
 def short_reward(sentence, pad, sReward, on):
     '''
     sentence: a batch of sentences -> shape: timesteps, batch
@@ -475,7 +500,7 @@ def F_train_one_batch(batched_data, D, GUpdate, GTarget, R, S,
                       Doptim, Goptim, Roptim, Soptim,
                       DLossFunc, GLossFunc, RLossFunc, SLossFunc,
                       epsilon, stepFunc, storage, sReward,
-                      sync=False, RTeacher=True, categorical=False):
+                      sync=False, RTeacher=True, categorical=False, rouge=False, until=3):
 
     sentences, summaries, scores = batched_data
     '''
@@ -602,9 +627,19 @@ def F_train_one_batch(batched_data, D, GUpdate, GTarget, R, S,
             for i in range(batch):
                 SLoss[i] = SLossFunc(P_scores[i:i+1], scores[i:i+1])
 
+            # rouge
+            rouge_metrics = torch.tensor([0.]*batch, device=GUpdate.on)
+            if rouge:
+                for i in range(batch):
+                    sho_i = shortened[:, i].detach().numpy()
+                    sum_i = summaries[:, i].detach().numpy()
+                    for u in range(1, until+1):
+                        rouge_metrics[i] += ROUGE(sho_i, sum_i,
+                                                  pad=GUpdate.pad, N=u)/until
+
             realistic = D(shortened).squeeze(-1)
             short = short_reward(shortened, GUpdate.pad, sReward, GUpdate.on)
-            reward_list.append(realistic+short-RLoss-SLoss)
+            reward_list.append(realistic+short+rouge_metrics-RLoss-SLoss)
 
             storage.save(states_list, action_list, reward_list)
             storage.optimize(GUpdate.QFunc, Goptim,
@@ -628,7 +663,7 @@ def predict(D=None, G=None, R=None, weight_dir=None, on='cpu'):
         R = torch.load(f=join(weight_dir, 'Reconstructor.pth'),
                        map_location=on)
     else:
-        raise FileNotFoundError
+        raise FileNotFoundError('File Not Found')
 
 
 def test():
@@ -658,13 +693,12 @@ def test():
     so = optim.SGD(scr.parameters(), lr=lr)
     print('F')
     F_train_one_batch((torch.randint(0, voc_size, (batch, timesteps)).to(on),
-                       torch.randint(
-        0, voc_size, (batch, timesteps)).to(on),
-        torch.randint(0, 5, (batch,)).to(on)),
-        dis, gen, gen, rec, scr,
-        do, go, ro, so,
-        F.binary_cross_entropy, F.mse_loss, F.cross_entropy, F.cross_entropy,
-        epsilon, step, storage, sReward, 'weight')
+                       torch.randint(0, voc_size, (batch, timesteps)).to(on),
+                       torch.randint(0, 5, (batch,)).to(on)),
+                      dis, gen, gen, rec, scr,
+                      do, go, ro, so,
+                      F.binary_cross_entropy, F.mse_loss, F.cross_entropy, F.cross_entropy,
+                      epsilon, step, storage, sReward, 'weight')
     print('N')
 
     class TestDataset(Dataset):
@@ -713,6 +747,7 @@ def main():
     parser.add_argument('-sl', '--selflearn', action='store_true')
     parser.add_argument('-ss', '--singlestep', action='store_true')
     parser.add_argument('-tdl', '--tdlambda', type=float, default=-1)
+    parser.add_argument('-ro', '--rouge', action='store_true')
     parser.add_argument('--off_gpu', action='store_true')
     args = parser.parse_args()
 
@@ -738,6 +773,7 @@ def main():
     tdlambda = args.tdlambda
     weight_dir = args.weight_dir
     RTeacher = not args.selflearn
+    rouge = args.rouge
 
     if full:
         '''
@@ -844,7 +880,7 @@ def main():
                                   DLossFunc=dis_loss, GLossFunc=gen_loss, RLossFunc=rec_loss, SLossFunc=scr_loss,
                                   epsilon=epsilon, stepFunc=step, storage=storage,
                                   sReward=sReward, sync=sync, RTeacher=RTeacher,
-                                  categorical=categorical)
+                                  categorical=categorical, rouge=rouge)
             else:
                 train_one_batch(batched_data=batch,
                                 D=dis, GUpdate=gen_update, GTarget=gen_target, R=rec,
@@ -875,5 +911,5 @@ def main():
                        f=join(weight_dir, 'ScorePredict.pth'))
 
 
-test()
-# main()
+# test()
+main()
