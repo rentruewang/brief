@@ -652,18 +652,57 @@ def F_train_one_batch(batched_data, D, GUpdate, GTarget, R, S,
                          GTarget.QFunc, GLossFunc, GUpdate.on)
 
 
-def predict(D=None, G=None, R=None, weight_dir=None, on='cpu'):
-    if all([D, G, R]):
+def summarize_input(G=None, weight_dir=None, on='cpu', wi_iw=None):
+
+    print('Rules: In sentence prediction, every `word` has to be separated,' +
+          'including .(periods) ,(commas), "(quotes) etc.')
+
+    if G:
         pass
     elif weight_dir:
-        D = torch.load(f=join(weight_dir, 'Discriminator.pth'),
-                       map_location=on)
-        G = torch.load(f=join(weight_dir, 'Generator.pth'),
-                       map_location=on)
-        R = torch.load(f=join(weight_dir, 'Reconstructor.pth'),
+        G = torch.load(f=join(weight_dir, 'Generator.pt'),
                        map_location=on)
     else:
         raise FileNotFoundError('File Not Found')
+
+    if wi_iw:
+        word_index, index_word = wi_iw
+    else:
+        word_index = torch.load(f=join(weight_dir, 'to_index.pt'))
+        index_word = torch.load(f=join(weight_dir, 'to_word.pt'))
+
+    def to_index(word):
+        if word in word_index.keys():
+            return word_index[word]
+        else:
+            return word_index['__UNK__']
+
+    def to_word(index):
+        return index_word[index]
+
+    with torch.no_grad():
+        while True:
+            print('Input a sentence, or type `:quit` to leave.\n')
+            input_sentence = input()
+            if input_sentence == ':quit':
+                break
+            input_sentence = [to_index(word)
+                              for word in input_sentence.split(' ')]
+            l = len(input_sentence)
+            if l < G.timesteps:
+                for _ in range(G.timesteps-len(input_sentence)):
+                    input_sentence.append(to_index('__PAD__'))
+
+            input_tensor = torch.tensor(
+                input_sentence, device='cpu').unsqueeze(1)
+
+            output = G(input_tensor)
+
+            output_sentence = output.squeeze_(1).numpy()
+
+            output_sentence = ' '.join([to_word(index)
+                                        for index in output_sentence])
+            print(output_sentence)
 
 
 def test():
@@ -691,6 +730,10 @@ def test():
     go = optim.SGD(gen.parameters(), lr=lr)
     ro = optim.SGD(rec.parameters(), lr=lr)
     so = optim.SGD(scr.parameters(), lr=lr)
+    print('S')
+    summarize_input(gen, wi_iw=[{'0': 0, '1': 1, '2': 2, '__UNK__': 'u', '__PAD__': 99}, [
+                    str(i) for i in range(voc_size)]])
+
     print('F')
     F_train_one_batch((torch.randint(0, voc_size, (batch, timesteps)).to(on),
                        torch.randint(0, voc_size, (batch, timesteps)).to(on),
@@ -699,6 +742,7 @@ def test():
                       do, go, ro, so,
                       F.binary_cross_entropy, F.mse_loss, F.cross_entropy, F.cross_entropy,
                       epsilon, step, storage, sReward, 'weight')
+
     print('N')
 
     class TestDataset(Dataset):
@@ -742,7 +786,7 @@ def main():
     parser.add_argument('-c', '--categorical', action='store_true')
     parser.add_argument('-E', '--step', type=float, default=.5)
     parser.add_argument('-sy', '--sync', type=int, default=100)
-    parser.add_argument('-p', '--predict', type=str, default='')
+    parser.add_argument('-p', '--predict', action='store_true')
     parser.add_argument('-W', '--weight_dir', type=str, default='weight_dir')
     parser.add_argument('-sl', '--selflearn', action='store_true')
     parser.add_argument('-ss', '--singlestep', action='store_true')
@@ -774,6 +818,7 @@ def main():
     weight_dir = args.weight_dir
     RTeacher = not args.selflearn
     rouge = args.rouge
+    predict = args.predict
 
     if full:
         '''
@@ -814,34 +859,39 @@ def main():
     SOS = dataset.to_index('__SOS__')
     PAD = dataset.to_index('__PAD__')
 
+    torch.save(obj=dataset.pair._to_index,
+               f=join(weight_dir, 'to_index.pt'))
+    torch.save(obj=dataset.pair._to_word,
+               f=join(weight_dir, 'to_word.pt'))
+
     voc_size = dataset.size
 
     dis = D(voc_size=voc_size,
             hidden_size=hidden_size,
             timesteps=timesteps,
             num_layers=num_layers,
-            on=device)
+            on=device).to(device)
 
     gen_update = G(voc_size=voc_size,
                    hidden_size=hidden_size,
                    timesteps=timesteps,
                    sos_pad=(SOS, PAD),
                    on=device,
-                   num_layers=num_layers)
+                   num_layers=num_layers).to(device)
 
     gen_target = G(voc_size=voc_size,
                    hidden_size=hidden_size,
                    timesteps=timesteps,
                    sos_pad=(SOS, PAD),
                    on=device,
-                   num_layers=num_layers)
+                   num_layers=num_layers).to(device)
 
     rec = R(voc_size=voc_size,
             hidden_size=hidden_size,
             timesteps=timesteps,
             on=device,
             sos=SOS,
-            num_layers=num_layers)
+            num_layers=num_layers).to(device)
 
     dis_optim = optim.RMSprop(params=dis.parameters(), lr=lr)
     gen_optim = optim.RMSprop(params=gen_update.parameters(), lr=lr)
@@ -856,7 +906,7 @@ def main():
                 hidden_size=hidden_size,
                 timesteps=timesteps,
                 num_layers=num_layers,
-                on=device)
+                on=device).to(device)
         scr_optim = optim.RMSprop(params=scr.parameters(), lr=lr)
         scr_loss = nn.CrossEntropyLoss()
 
@@ -891,25 +941,29 @@ def main():
                                 categorical=categorical)
 
         torch.save(obj=dis.state_dict(),
-                   f=join(weight_dir, 'Discriminator_{:03d}.pth'.format(epoch)))
+                   f=join(weight_dir, 'Discriminator_{:03d}.pt'.format(epoch)))
         torch.save(obj=gen_update.state_dict(),
-                   f=join(weight_dir, 'Generator_{:03d}.pth'.format(epoch)))
+                   f=join(weight_dir, 'Generator_{:03d}.pt'.format(epoch)))
         torch.save(obj=rec.state_dict(),
-                   f=join(weight_dir, 'Reconstructor_{:03d}.pth'.format(epoch)))
+                   f=join(weight_dir, 'Reconstructor_{:03d}.pt'.format(epoch)))
         # for prediction use
         torch.save(obj=dis.state_dict(),
-                   f=join(weight_dir, 'Discriminator.pth'))
+                   f=join(weight_dir, 'Discriminator.pt'))
         torch.save(obj=gen_update.state_dict(),
-                   f=join(weight_dir, 'Generator.pth'))
+                   f=join(weight_dir, 'Generator.pt'))
         torch.save(obj=rec.state_dict(),
-                   f=join(weight_dir, 'Reconstructor.pth'))
+                   f=join(weight_dir, 'Reconstructor.pt'))
 
         if full:
             torch.save(obj=scr.state_dict(),
-                       f=join(weight_dir, 'ScorePredict_{:03d}.pth'.format(epoch)))
+                       f=join(weight_dir, 'ScorePredict_{:03d}.pt'.format(epoch)))
             torch.save(obj=scr.state_dict(),
-                       f=join(weight_dir, 'ScorePredict.pth'))
+                       f=join(weight_dir, 'ScorePredict.pt'))
+
+    if predict:
+        summarize_input(G=gen_target, weight_dir=weight_dir, on='cpu',
+                        wi_iw=[dataset.pair._to_index, dataset.pair._to_word])
 
 
-# test()
-main()
+test()
+# main()
