@@ -965,5 +965,4 @@ def main():
                         wi_iw=[dataset.pair._to_index, dataset.pair._to_word])
 
 
-test()
-# main()
+main()
