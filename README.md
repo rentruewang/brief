@@ -18,6 +18,8 @@ Here's the brief version:
 
 In `basic_main.py`, the _Generator_, denoted **G**, the Discriminator, denoted **D**, and the Reconstructor, denoted **R**, are all `seq2seq` models. **G+R** is an **Auto Encoder Network**, while **G+D** is trained with **Inverse Reinforcement Learning**. Techniques in use: **Dueling DQN**.
 
-In comparison with `basic_main.py`, `Actor-Critic.py` and `Q.py` uses more advanced techniques, and is a lot more efficient in terms of memory.
+In comparison with `basic_main.py`, `Q.py` uses more advanced techniques, and is a lot more efficient in terms of memory.
+
+An epoch typically takes around _3 days_ to train, on a medium sized dataset with around _half a million_ entries or sentences.
 
 [paper]: http://speech.ee.ntu.edu.tw/~tlkagk/paper/learning-encode-text.pdf
