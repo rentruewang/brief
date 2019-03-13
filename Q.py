@@ -512,6 +512,7 @@ def F_train_one_batch(batched_data, D, GUpdate, GTarget, R, S,
     summaries = summaries.permute(1, 0)
 
     # train D
+    print("training D", end='\r')
     DLoss = torch.tensor(0., device=D.on)
 
     is_real = D(sentences)
@@ -535,6 +536,7 @@ def F_train_one_batch(batched_data, D, GUpdate, GTarget, R, S,
     Doptim.step()
 
     # train S
+    print("training S", end='\r')
     SLoss = torch.tensor(0., device=S.on)
 
     predicted = S(sentences)
@@ -549,6 +551,7 @@ def F_train_one_batch(batched_data, D, GUpdate, GTarget, R, S,
 
     # train R
     # teacher forcing
+    print("training R", '\r')
     batch = sentences.shape[1]
     states = torch.zeros((R.num_layers, batch, R.hidden_size), device=R.on)
 
@@ -574,6 +577,7 @@ def F_train_one_batch(batched_data, D, GUpdate, GTarget, R, S,
 
     # train G
     # decoder of G is trained with RL
+    print("training G", end='\r')
     states = torch.zeros((GUpdate.num_layers, batch,
                           GUpdate.hidden_size), device=GUpdate.on)
     encoded, states = GUpdate.encoder(sentences, states)
