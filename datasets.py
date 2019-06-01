@@ -200,7 +200,7 @@ class AmazonSentenceDataset(Dataset):
         for char in special_chars:
             string = string.replace(char, ' ' + char + ' ')
         l = string.replace('  ', ' ').split('.')
-        return [item.strip()+' .' for item in l]
+        return [item.strip() + ' .' for item in l]
 
     def sentence_tensor(self, sentences, timesteps, batch_size):
 
@@ -221,8 +221,8 @@ class AmazonSentenceDataset(Dataset):
 
         tensor_list = []
 
-        for i in range(0, int(sentences_t.shape[1])-batch_size, batch_size):
-            tensor_list.append(sentences_t[:, i:i+batch_size])
+        for i in range(0, int(sentences_t.shape[1]) - batch_size, batch_size):
+            tensor_list.append(sentences_t[:, i:i + batch_size])
 
         tensor_list = torch.cat(tensor_list, dim=0)
         if self.on_gpu:
@@ -278,13 +278,14 @@ class AmazonFullDataset(Dataset):
 
             string = string.replace('. .', ' . ')
 
-            return (string.strip() + ' .').replace('. .', '.').replace('  ', ' ')
+            return (string.strip() + ' .').replace('. .',
+                                                   '.').replace('  ', ' ')
 
         def pad(sentence, timesteps, pad_val):
             sentence = sentence[:timesteps]
 
             l = len(sentence)
-            for _ in range(timesteps-l):
+            for _ in range(timesteps - l):
                 sentence.append(pad_val)
             return sentence
 
@@ -305,7 +306,7 @@ class AmazonFullDataset(Dataset):
 
         for i in range(len(review_text)):
             r = review_text[i]
-            review_text[i] = [t.strip()+' .' for t in r.split('.')
+            review_text[i] = [t.strip() + ' .' for t in r.split('.')
                               if len(t) != 0]
 
         self.pair = Pair(threshold)
@@ -363,7 +364,8 @@ class AmazonFullDataset(Dataset):
     def __getitem__(self, index):
         rand = random.randint(low=0, high=len(self.text[index]))
         if self.on_gpu:
-            return (self.text[index][rand], self.summ[index], self.overall[index])
+            return (self.text[index][rand],
+                    self.summ[index], self.overall[index])
         else:
             return (self.text[index][rand].to(self.device),
                     self.summ[index].to(self.device),

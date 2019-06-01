@@ -44,7 +44,7 @@ if args.test:
         def to_index(self, sos): return 0
 
         @property
-        def size(self): return len(self.data)+1
+        def size(self): return len(self.data) + 1
     dataset = TestDataset(*args.size)
 else:
     dataset = AmazonReviewDataset(filename=args.json,
@@ -98,7 +98,7 @@ Q_optimizer = optim.RMSprop(Q_func.parameters(), lr=args.lr)
 R_optimizer = optim.RMSprop(reconstructor.parameters(), lr=args.lr)
 D_optimizer = optim.RMSprop(discriminator.parameters(), lr=args.lr)
 
-for epoch in range(1, 1+args.epochs):
+for epoch in range(1, 1 + args.epochs):
 
     print('epoch {} / {}'.format(epoch, args.epochs))
     avgloss = []

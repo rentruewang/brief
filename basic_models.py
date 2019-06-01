@@ -36,7 +36,7 @@ class Encoder(nn.Module):
 class OneHotEncoder(nn.Module):
     '''
     input is supposed to be a one-hot vector,
-    or something similar like a softmax input    
+    or something similar like a softmax input
     '''
 
     def __init__(self,
@@ -72,9 +72,9 @@ class AttnDecoder(nn.Module):
         super().__init__()
         self.embedding = nn.Embedding(num_embeddings=voc_size,
                                       embedding_dim=hidden_size)
-        self.attn = nn.Linear(in_features=(num_layers+1)*hidden_size,
+        self.attn = nn.Linear(in_features=(num_layers + 1) * hidden_size,
                               out_features=timesteps)
-        self.combine = nn.Linear(in_features=2*hidden_size,
+        self.combine = nn.Linear(in_features=2 * hidden_size,
                                  out_features=hidden_size)
         self.rnn = nn.GRU(input_size=hidden_size,
                           hidden_size=hidden_size,
@@ -94,7 +94,7 @@ class AttnDecoder(nn.Module):
         # shape: batch, timestep=1, hidden_size
 
         info = torch.cat(
-            (embedded, states.view(-1, 1, self.num_layers*self.hidden_size)), dim=-1)
+            (embedded, states.view(-1, 1, self.num_layers * self.hidden_size)), dim=-1)
         # shape: batch, timestep, (num_layers+1)*hidden_size
 
         attn = F.relu(self.attn(info))
@@ -164,7 +164,7 @@ class Q_Generator(nn.Module):
         gru_out, states = self.encoder(input, states)
 
         current_word = torch.tensor(
-            [self.sos_value]*batch_size, device=self.device)
+            [self.sos_value] * batch_size, device=self.device)
 
         batched_sentences = []
         batched_Q = []
@@ -181,7 +181,7 @@ class Q_Generator(nn.Module):
 
             random_indices = (random.uniform(low=0., high=1., size=[
                               batch_size]) < self.epsilon).astype('long')
-            random_indices = np.stack([random_indices]*2, axis=-1)
+            random_indices = np.stack([random_indices] * 2, axis=-1)
 
             random_word_output = torch.randint(low=0, high=self.voc_size, size=[
                                                batch_size], device=self.device)
@@ -245,7 +245,7 @@ class Reconstructor(nn.Module):
         gru_out, states = self.encoder(input, states)
 
         current_word = torch.tensor(
-            [self.sos_value]*batch_size, device=self.device)
+            [self.sos_value] * batch_size, device=self.device)
 
         batched_distribution = []
 
@@ -278,7 +278,7 @@ class Discriminator(nn.Module):
                           num_layers=num_layers)
         self.grucell_list = [nn.GRUCell(
             input_size=hidden_size, hidden_size=hidden_size).to(device) for i in range(num_layers)]
-        self.score = nn.Linear(in_features=hidden_size*num_layers,
+        self.score = nn.Linear(in_features=hidden_size * num_layers,
                                out_features=1)
 
         self.num_layers = num_layers

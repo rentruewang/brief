@@ -37,11 +37,11 @@ def ROUGE(inputs, reference, pad, N=1):
     inp_grams = []
     ref_grams = []
 
-    for i in range(len(inputs)-N+1):
-        inp_grams.append(inputs[i:i+N])
+    for i in range(len(inputs) - N + 1):
+        inp_grams.append(inputs[i:i + N])
 
-    for i in range(len(reference)-N+1):
-        ref_grams.append(reference[i:i+N])
+    for i in range(len(reference) - N + 1):
+        ref_grams.append(reference[i:i + N])
 
     count = 0
 
@@ -49,7 +49,7 @@ def ROUGE(inputs, reference, pad, N=1):
         if t in ref_grams:
             count += 1
 
-    return count/len(ref_grams)
+    return count / len(ref_grams)
 
 
 def short_reward(sentence, pad, sReward, on):
@@ -124,12 +124,13 @@ class Storage:
                     Q_NSval.append(output.squeeze_(0).max(-1)[0])
 
                 coefficient = 1
-                for Q, next_Q, rew in zip(Q_values[:-1], Q_NSval[:-1], reward[:-1]):
-                    loss += coefficient*QlossFunc(Q, rew+next_Q)
+                for Q, next_Q, rew in zip(
+                        Q_values[:-1], Q_NSval[:-1], reward[:-1]):
+                    loss += coefficient * QlossFunc(Q, rew + next_Q)
                     coefficient *= self.tdlambda
-                loss *= (1-self.tdlambda)
+                loss *= (1 - self.tdlambda)
                 loss += coefficient * \
-                    QlossFunc(Q_values[-1], reward[-1]+Q_NSval[-1])
+                    QlossFunc(Q_values[-1], reward[-1] + Q_NSval[-1])
 
                 Qoptim.zero_grad()
                 loss.backward(retain_graph=True)
@@ -143,7 +144,7 @@ class Storage:
                 Q_NSval, _ = QEval(*S[-1])
                 Q_NSval = Q_NSval.squeeze_(0).max(-1)[0]
                 r = sum(reward)
-                loss = QlossFunc(Q_value, r+Q_NSval)
+                loss = QlossFunc(Q_value, r + Q_NSval)
 
                 Qoptim.zero_grad()
                 loss.backward(retain_graph=True)
@@ -161,7 +162,7 @@ class Storage:
                 Q_values.append(output.squeeze_(0).max(-1)[0])
 
                 for i, r in enumerate(reward):
-                    loss += QlossFunc(Q_values[i], r+Q_values[i+1])
+                    loss += QlossFunc(Q_values[i], r + Q_values[i + 1])
 
                 Qoptim.zero_grad()
                 loss.backward(retain_graph=True)
@@ -219,7 +220,8 @@ class G(nn.Module):
     2 trained with R as a VAE module
     '''
 
-    def __init__(self, voc_size, hidden_size, timesteps, on, sos_pad, num_layers=3):
+    def __init__(self, voc_size, hidden_size,
+                 timesteps, on, sos_pad, num_layers=3):
         super().__init__()
         self.encoder = Encoder(voc_size, hidden_size, num_layers)
         self.decoder = Decoder(voc_size, hidden_size, timesteps, num_layers)
@@ -299,7 +301,8 @@ class R(nn.Module):
     1 trained on data Q generates
     '''
 
-    def __init__(self, voc_size, hidden_size, timesteps, on, sos, num_layers=3):
+    def __init__(self, voc_size, hidden_size,
+                 timesteps, on, sos, num_layers=3):
         super().__init__()
         self.encoder = Encoder(voc_size, hidden_size, num_layers)
         decoder = Decoder(voc_size, hidden_size, timesteps, num_layers)
@@ -437,8 +440,8 @@ def train_one_batch(batched_data, D, GUpdate, GTarget, R,
                           GUpdate.hidden_size), device=GUpdate.on)
     encoded, states = GUpdate.encoder(batched_data, states)
 
-    word = torch.tensor([GUpdate.sos]*batch, device=GUpdate.on)
-    pad = torch.tensor([GUpdate.pad]*batch, device=GUpdate.on)
+    word = torch.tensor([GUpdate.sos] * batch, device=GUpdate.on)
+    pad = torch.tensor([GUpdate.pad] * batch, device=GUpdate.on)
     shortened = []
 
     while True:
@@ -455,7 +458,7 @@ def train_one_batch(batched_data, D, GUpdate, GTarget, R,
                 GUpdate.QFunc, S, epsilon, categorical)
             S = [action, states, encoded]
             states_list.append(S)
-            reward_list.append(torch.tensor([0.]*batch, device=GUpdate.on))
+            reward_list.append(torch.tensor([0.] * batch, device=GUpdate.on))
             action_list.append(action.squeeze_(0))
             shortened.append(action)
 
@@ -468,22 +471,22 @@ def train_one_batch(batched_data, D, GUpdate, GTarget, R,
             states_list.append(S)
 
             shortened = torch.stack(shortened, dim=0)
-            loss = torch.tensor([0.]*batch, device=GUpdate.on)
+            loss = torch.tensor([0.] * batch, device=GUpdate.on)
 
             s = torch.zeros((R.num_layers, batch, R.hidden_size), device=R.on)
             Rencoded, s = R.encoder(shortened, s)
 
-            word = torch.tensor([R.sos]*batch, device=R.on)
+            word = torch.tensor([R.sos] * batch, device=R.on)
             for B in batched_data:
                 output, s = R.decoder(word, s, Rencoded)
                 output.squeeze_(0)
                 for i in range(batch):
-                    loss[i] += RLossFunc(output[i:i+1], B[i:i+1])
+                    loss[i] += RLossFunc(output[i:i + 1], B[i:i + 1])
                 word = B if RTeacher else output.argmax(-1)
 
             realistic = D(shortened).squeeze(-1)
             short = short_reward(shortened, GUpdate.pad, sReward, GUpdate.on)
-            reward_list.append(realistic+short-loss)
+            reward_list.append(realistic + short - loss)
 
             storage.save(states_list, action_list, reward_list)
             storage.optimize(GUpdate.QFunc, Goptim,
@@ -582,8 +585,8 @@ def F_train_one_batch(batched_data, D, GUpdate, GTarget, R, S,
                           GUpdate.hidden_size), device=GUpdate.on)
     encoded, states = GUpdate.encoder(sentences, states)
 
-    word = torch.tensor([GUpdate.sos]*batch, device=GUpdate.on)
-    pad = torch.tensor([GUpdate.pad]*batch, device=GUpdate.on)
+    word = torch.tensor([GUpdate.sos] * batch, device=GUpdate.on)
+    pad = torch.tensor([GUpdate.pad] * batch, device=GUpdate.on)
     shortened = []
 
     while True:
@@ -600,7 +603,7 @@ def F_train_one_batch(batched_data, D, GUpdate, GTarget, R, S,
                 GUpdate.QFunc, STATES, epsilon, categorical)
             STATES = [action, states, encoded]
             states_list.append(STATES)
-            reward_list.append(torch.tensor([0.]*batch, device=GUpdate.on))
+            reward_list.append(torch.tensor([0.] * batch, device=GUpdate.on))
             action_list.append(action.squeeze_(0))
             shortened.append(action)
 
@@ -613,37 +616,42 @@ def F_train_one_batch(batched_data, D, GUpdate, GTarget, R, S,
             states_list.append(STATES)
 
             shortened = torch.stack(shortened, dim=0)
-            RLoss = torch.tensor([0.]*batch, device=GUpdate.on)
+            RLoss = torch.tensor([0.] * batch, device=GUpdate.on)
 
             s = torch.zeros((R.num_layers, batch, R.hidden_size), device=R.on)
             Rencoded, s = R.encoder(shortened, s)
 
-            word = torch.tensor([R.sos]*batch, device=R.on)
+            word = torch.tensor([R.sos] * batch, device=R.on)
             for B in sentences:
                 Routput, s = R.decoder(word, s, Rencoded)
                 Routput.squeeze_(0)
                 for i in range(batch):
-                    RLoss[i] += RLossFunc(Routput[i:i+1], B[i:i+1])
+                    RLoss[i] += RLossFunc(Routput[i:i + 1], B[i:i + 1])
                 word = B if RTeacher else Routput.argmax(-1)
 
-            SLoss = torch.tensor([0.]*batch, device=GUpdate.on)
+            SLoss = torch.tensor([0.] * batch, device=GUpdate.on)
             P_scores = S(shortened)
             for i in range(batch):
-                SLoss[i] = SLossFunc(P_scores[i:i+1], scores[i:i+1])
+                SLoss[i] = SLossFunc(P_scores[i:i + 1], scores[i:i + 1])
 
             # rouge
-            rouge_metrics = torch.tensor([0.]*batch, device=GUpdate.on)
+            rouge_metrics = torch.tensor([0.] * batch, device=GUpdate.on)
             if rouge:
                 for i in range(batch):
                     sho_i = shortened[:, i].detach().numpy()
                     sum_i = summaries[:, i].detach().numpy()
-                    for u in range(1, until+1):
+                    for u in range(1, until + 1):
                         rouge_metrics[i] += ROUGE(sho_i, sum_i,
-                                                  pad=GUpdate.pad, N=u)/until
+                                                  pad=GUpdate.pad, N=u) / until
 
             realistic = D(shortened).squeeze(-1)
             short = short_reward(shortened, GUpdate.pad, sReward, GUpdate.on)
-            reward_list.append(realistic+short+rouge_metrics-RLoss-SLoss)
+            reward_list.append(
+                realistic +
+                short +
+                rouge_metrics -
+                RLoss -
+                SLoss)
 
             storage.save(states_list, action_list, reward_list)
             storage.optimize(GUpdate.QFunc, Goptim,
@@ -694,7 +702,7 @@ def summarize_input(G=None, weight_dir=None, on='cpu', wi_iw=None):
                               for word in input_sentence.split(' ')]
             l = len(input_sentence)
             if l < G.timesteps:
-                for _ in range(G.timesteps-len(input_sentence)):
+                for _ in range(G.timesteps - len(input_sentence)):
                     input_sentence.append(to_index('__PAD__'))
 
             input_tensor = torch.tensor(
