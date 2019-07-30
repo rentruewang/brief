@@ -1,5 +1,5 @@
-'''text source: Amazon review data
-'''
+"""text source: Amazon review data
+"""
 import json
 import re
 from os.path import expanduser
@@ -16,7 +16,7 @@ class Pair:
         self.threshold = threshold
         self.__reserved = {}
         self._to_index = {}
-        self._to_word = ['__SOS__', '__PAD__', '__UNK__']
+        self._to_word = ["__SOS__", "__PAD__", "__UNK__"]
         self.__built = False
 
     def __iadd__(self, other):
@@ -44,17 +44,11 @@ class Pair:
         try:
             return self._to_index[word]
         except KeyError:
-            return self._to_index['__UNK__']
+            return self._to_index["__UNK__"]
 
 
 class AmazonReviewDataset(Dataset):
-
-    def __init__(self,
-                 filename,
-                 threshold,
-                 batch_size,
-                 device,
-                 on_gpu=False):
+    def __init__(self, filename, threshold, batch_size, device, on_gpu=False):
         super().__init__()
         with open(expanduser(filename)) as file:
             try:
@@ -63,13 +57,14 @@ class AmazonReviewDataset(Dataset):
                 file.seek(0)
                 data = [json.loads(l) for l in file.readlines()]
 
-        text = ' '.join(d['reviewText']
-                        for d in data if len(d['reviewText']) != 0).lower()
-        text = ' '.join(self.preprocess(text))
-        print('processed')
+        text = " ".join(
+            d["reviewText"] for d in data if len(d["reviewText"]) != 0
+        ).lower()
+        text = " ".join(self.preprocess(text))
+        print("processed")
 
         self.pair = Pair(threshold)
-        for word in text.split(' '):
+        for word in text.split(" "):
             self.pair += word
         self.pair.build()
 
@@ -89,39 +84,39 @@ class AmazonReviewDataset(Dataset):
 
     def preprocess(self, string):
 
-        string = re.sub(pattern="[a-z]*&.;", repl=' ', string=string)
+        string = re.sub(pattern="[a-z]*&.;", repl=" ", string=string)
 
         replaced_chars = ["\\", "\n"]
-        special_chars = ["...", ',', "'", '"', '(', ')', '.']
+        special_chars = ["...", ",", "'", '"', "(", ")", "."]
 
         for char in replaced_chars:
-            string = string.replace(char, ' ')
+            string = string.replace(char, " ")
 
-        string = string.replace('!', '.')
+        string = string.replace("!", ".")
 
         for char in special_chars:
-            string = string.replace(char, ' ' + char + ' ')
-        l = string.replace('  ', ' ').split('.')
-        return [item.strip() + ' .' for item in l]
+            string = string.replace(char, " " + char + " ")
+        l = string.replace("  ", " ").split(".")
+        return [item.strip() + " ." for item in l]
 
     def to_tensor(self, text, batch_size):
         tensor_list = []
         encoded = []
-        for word in text.split(' '):
+        for word in text.split(" "):
             encoded.append(self.pair.to_index(word))
 
         step = len(encoded) // batch_size
         for index in range(0, len(encoded) - step, step):
-            tensor_list.append(encoded[index:index + step])
+            tensor_list.append(encoded[index : index + step])
         tensor_list = sorted(tensor_list, key=lambda x: len(x), reverse=True)
-        tensor_list = [torch.tensor(line, dtype=torch.long)
-                       for line in tensor_list]
+        tensor_list = [torch.tensor(line, dtype=torch.long) for line in tensor_list]
 
         if self.on_gpu:
             tensor_list = [tensor.to(self.device) for tensor in tensor_list]
 
         tensor_list = pad_sequence(
-            tensor_list, padding_value=self.pair._to_index['__PAD__'])
+            tensor_list, padding_value=self.pair._to_index["__PAD__"]
+        )
         return tensor_list
 
     @property
@@ -145,14 +140,9 @@ class AmazonReviewDataset(Dataset):
 
 
 class AmazonSentenceDataset(Dataset):
-
-    def __init__(self,
-                 filename,
-                 threshold,
-                 batch_size,
-                 timesteps,
-                 device,
-                 on_gpu=False):
+    def __init__(
+        self, filename, threshold, batch_size, timesteps, device, on_gpu=False
+    ):
         super().__init__()
         with open(expanduser(filename)) as file:
             try:
@@ -161,13 +151,14 @@ class AmazonSentenceDataset(Dataset):
                 file.seek(0)
                 data = [json.loads(l) for l in file.readlines()]
 
-        text = ' '.join(d['reviewText']
-                        for d in data if len(d['reviewText']) != 0).lower()
+        text = " ".join(
+            d["reviewText"] for d in data if len(d["reviewText"]) != 0
+        ).lower()
         text = self.preprocess(text)
-        print('processed')
+        print("processed")
 
         self.pair = Pair(threshold)
-        for word in (' '.join(text)).split(' '):
+        for word in (" ".join(text)).split(" "):
             self.pair += word
         self.pair.build()
 
@@ -187,42 +178,42 @@ class AmazonSentenceDataset(Dataset):
 
     def preprocess(self, string):
 
-        string = re.sub(pattern="[a-z]*&.;", repl=' ', string=string)
+        string = re.sub(pattern="[a-z]*&.;", repl=" ", string=string)
 
         replaced_chars = ["\\", "\n"]
-        special_chars = ["...", ',', "'", '"', '(', ')', '.']
+        special_chars = ["...", ",", "'", '"', "(", ")", "."]
 
         for char in replaced_chars:
-            string = string.replace(char, ' ')
+            string = string.replace(char, " ")
 
-        string = string.replace('!', '.')
+        string = string.replace("!", ".")
 
         for char in special_chars:
-            string = string.replace(char, ' ' + char + ' ')
-        l = string.replace('  ', ' ').split('.')
-        return [item.strip() + ' .' for item in l]
+            string = string.replace(char, " " + char + " ")
+        l = string.replace("  ", " ").split(".")
+        return [item.strip() + " ." for item in l]
 
     def sentence_tensor(self, sentences, timesteps, batch_size):
-
         def convert_line(line):
             l = []
-            for word in line.split(' '):
+            for word in line.split(" "):
                 l.append(self.pair.to_index(word))
             return l
 
-        sentences = [' '.join(s.split(' ')[:timesteps]) for s in sentences]
+        sentences = [" ".join(s.split(" ")[:timesteps]) for s in sentences]
         sentences = sorted(sentences, key=lambda x: len(x), reverse=True)
         sentences = [convert_line(line) for line in sentences]
 
         sentences_t = [torch.tensor(s, dtype=torch.long) for s in sentences]
 
-        sentences_t = pad_sequence(sentences_t,
-                                   padding_value=self.pair._to_index['__PAD__'])
+        sentences_t = pad_sequence(
+            sentences_t, padding_value=self.pair._to_index["__PAD__"]
+        )
 
         tensor_list = []
 
         for i in range(0, int(sentences_t.shape[1]) - batch_size, batch_size):
-            tensor_list.append(sentences_t[:, i:i + batch_size])
+            tensor_list.append(sentences_t[:, i : i + batch_size])
 
         tensor_list = torch.cat(tensor_list, dim=0)
         if self.on_gpu:
@@ -250,36 +241,30 @@ class AmazonSentenceDataset(Dataset):
 
 
 class AmazonFullDataset(Dataset):
-    '''
+    """
     returns a sentene along with its score and summary
-    '''
+    """
 
-    def __init__(self,
-                 filename,
-                 threshold,
-                 timesteps,
-                 device,
-                 on_gpu=False,
-                 full=False):
-
+    def __init__(
+        self, filename, threshold, timesteps, device, on_gpu=False, full=False
+    ):
         def process(string):
-            string = re.sub(pattern="[a-z]*&.;", repl=' ', string=string)
+            string = re.sub(pattern="[a-z]*&.;", repl=" ", string=string)
 
             replaced_chars = ["\\", "\n"]
-            special_chars = ["...", ',', "'", '"', '(', ')', '.']
+            special_chars = ["...", ",", "'", '"', "(", ")", "."]
 
             for char in replaced_chars:
-                string = string.replace(char, ' ')
+                string = string.replace(char, " ")
 
-            string = string.replace('!', '.')
+            string = string.replace("!", ".")
 
             for char in special_chars:
-                string = string.replace(char, ' ' + char + ' ')
+                string = string.replace(char, " " + char + " ")
 
-            string = string.replace('. .', ' . ')
+            string = string.replace(". .", " . ")
 
-            return (string.strip() + ' .').replace('. .',
-                                                   '.').replace('  ', ' ')
+            return (string.strip() + " .").replace(". .", ".").replace("  ", " ")
 
         def pad(sentence, timesteps, pad_val):
             sentence = sentence[:timesteps]
@@ -297,25 +282,24 @@ class AmazonFullDataset(Dataset):
                 file.seek(0)
                 data = [json.loads(l) for l in file.readlines()]
 
-        review_text = [d['reviewText'] for d in data]
-        review_summary = [d['summary'] for d in data]
-        overall_score = [d['overall'] for d in data]
+        review_text = [d["reviewText"] for d in data]
+        review_summary = [d["summary"] for d in data]
+        overall_score = [d["overall"] for d in data]
 
         review_text = [process(text) for text in review_text]
         review_summary = [process(s) for s in review_summary]
 
         for i in range(len(review_text)):
             r = review_text[i]
-            review_text[i] = [t.strip() + ' .' for t in r.split('.')
-                              if len(t) != 0]
+            review_text[i] = [t.strip() + " ." for t in r.split(".") if len(t) != 0]
 
         self.pair = Pair(threshold)
 
         for t, s in zip(review_text, review_summary):
             for sentence in t:
-                for word in sentence.split(' '):
+                for word in sentence.split(" "):
                     self.pair += word
-            for word in s.split(' '):
+            for word in s.split(" "):
                 self.pair += word
 
         self.pair.build()
@@ -325,12 +309,12 @@ class AmazonFullDataset(Dataset):
             ss = []
             for sentence in t:
                 sen = []
-                for word in sentence.split(' '):
+                for word in sentence.split(" "):
                     sen.append(self.pair.to_index(word))
                 ss.append(sen)
             text.append(ss)
             ss = []
-            for word in s.split(' '):
+            for word in s.split(" "):
                 ss.append(self.pair.to_index(word))
             summ.append(ss)
 
@@ -338,13 +322,11 @@ class AmazonFullDataset(Dataset):
         for tl in text:
             same_origin = []
             for t in tl:
-                same_origin.append(
-                    pad(t, timesteps, self.pair._to_index['__PAD__']))
+                same_origin.append(pad(t, timesteps, self.pair._to_index["__PAD__"]))
             text_list.append(same_origin)
         summ_list = []
         for s in summ:
-            summ_list.append(
-                pad(s, timesteps, self.pair._to_index['__PAD__']))
+            summ_list.append(pad(s, timesteps, self.pair._to_index["__PAD__"]))
 
         self.text = [torch.tensor(t, dtype=torch.long) for t in text_list]
         self.summ = torch.tensor(summ_list, dtype=torch.long)
@@ -364,9 +346,10 @@ class AmazonFullDataset(Dataset):
     def __getitem__(self, index):
         rand = random.randint(low=0, high=len(self.text[index]))
         if self.on_gpu:
-            return (self.text[index][rand],
-                    self.summ[index], self.overall[index])
+            return (self.text[index][rand], self.summ[index], self.overall[index])
         else:
-            return (self.text[index][rand].to(self.device),
-                    self.summ[index].to(self.device),
-                    self.overall[index].to(self.device))
+            return (
+                self.text[index][rand].to(self.device),
+                self.summ[index].to(self.device),
+                self.overall[index].to(self.device),
+            )
