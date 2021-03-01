@@ -195,10 +195,7 @@ class AmazonSentenceDataset(Dataset):
 
     def sentence_tensor(self, sentences, timesteps, batch_size):
         def convert_line(line):
-            l = []
-            for word in line.split(" "):
-                l.append(self.pair.to_index(word))
-            return l
+            return list(self.pair.to_index(word) for word in line.split(" "))
 
         sentences = [" ".join(s.split(" ")[:timesteps]) for s in sentences]
         sentences = sorted(sentences, key=lambda x: len(x), reverse=True)
@@ -210,10 +207,10 @@ class AmazonSentenceDataset(Dataset):
             sentences_t, padding_value=self.pair._to_index["__PAD__"]
         )
 
-        tensor_list = []
-
-        for i in range(0, int(sentences_t.shape[1]) - batch_size, batch_size):
-            tensor_list.append(sentences_t[:, i : i + batch_size])
+        tensor_list = list(
+            sentences_t[:, i : i + batch_size]
+            for i in range(0, int(sentences_t.shape[1]) - batch_size, batch_size)
+        )
 
         tensor_list = torch.cat(tensor_list, dim=0)
         if self.on_gpu:

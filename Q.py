@@ -43,11 +43,7 @@ def ROUGE(inputs, reference, pad, N=1):
     for i in range(len(reference) - N + 1):
         ref_grams.append(reference[i : i + N])
 
-    count = 0
-
-    for t in inp_grams:
-        if t in ref_grams:
-            count += 1
+    count = sum(1 for t in inp_grams if t in ref_grams)
 
     return count / len(ref_grams)
 
@@ -727,7 +723,7 @@ def summarize_input(G=None, weight_dir=None, on="cpu", wi_iw=None):
             input_tensor = torch.tensor(input_sentence, device="cpu").unsqueeze(1)
             output = G(input_tensor)
             output_sentence = output.squeeze_(1).numpy()
-            output_sentence = " ".join([to_word(index) for index in output_sentence])
+            output_sentence = " ".join(to_word(index) for index in output_sentence)
             print(output_sentence)
 
 
