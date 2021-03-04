@@ -2,12 +2,12 @@
 """
 import json
 import re
-from os.path import expanduser
+from json import JSONDecodeError
+from os import path as os_path
 
-import numpy as np
 import torch
 from numpy import random
-from torch.nn.utils.rnn import pad_sequence
+from torch.nn.utils import rnn
 from torch.utils.data import Dataset
 
 
@@ -50,10 +50,10 @@ class Pair:
 class AmazonReviewDataset(Dataset):
     def __init__(self, filename, threshold, batch_size, device, on_gpu=False):
         super().__init__()
-        with open(expanduser(filename)) as file:
+        with open(os_path.expanduser(filename)) as file:
             try:
                 data = json.load(file)
-            except json.JSONDecodeError:
+            except JSONDecodeError:
                 file.seek(0)
                 data = [json.loads(l) for l in file.readlines()]
 
@@ -82,7 +82,8 @@ class AmazonReviewDataset(Dataset):
         else:
             return self.text[index].to(self.device)
 
-    def preprocess(self, string):
+    @staticmethod
+    def preprocess(string):
 
         string = re.sub(pattern="[a-z]*&.;", repl=" ", string=string)
 
@@ -114,7 +115,7 @@ class AmazonReviewDataset(Dataset):
         if self.on_gpu:
             tensor_list = [tensor.to(self.device) for tensor in tensor_list]
 
-        tensor_list = pad_sequence(
+        tensor_list = rnn.pad_sequence(
             tensor_list, padding_value=self.pair._to_index["__PAD__"]
         )
         return tensor_list
@@ -144,7 +145,7 @@ class AmazonSentenceDataset(Dataset):
         self, filename, threshold, batch_size, timesteps, device, on_gpu=False
     ):
         super().__init__()
-        with open(expanduser(filename)) as file:
+        with open(os_path.expanduser(filename)) as file:
             try:
                 data = json.load(file)
             except json.JSONDecodeError:
@@ -272,7 +273,7 @@ class AmazonFullDataset(Dataset):
             return sentence
 
         super().__init__()
-        with open(expanduser(filename)) as file:
+        with open(os_path.expanduser(filename)) as file:
             try:
                 data = json.load(file)
             except json.JSONDecodeError:

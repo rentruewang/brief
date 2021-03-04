@@ -1,4 +1,3 @@
-from Q import main
 from argparse import ArgumentParser
 
 import numpy as np
@@ -11,6 +10,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from basic_models import Discriminator, Q_Generator, Reconstructor
 from datasets import AmazonReviewDataset
+from Q import main
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -182,25 +182,22 @@ if __name__ == "__main__":
         print("average loss: {}".format(sum(avgloss) / len(avgloss)))
 
     if not args.test:
-        with torch.no_grad():
-            with open("predict.txt", "w+") as predicted:
-                for _ in range(args.predicted):
-                    random_index = random.randint(
-                        low=0, high=len(dataset) - args.maxlen
-                    )
-                    sentences = dataset[random_index : random_index + args.maxlen]
-                    for j in range(sentences.shape[1]):
-                        input_sentence = sentences[:, j : j + 1]
-                        output_sentence, _ = Q_func(input_sentence)
-                        output_sentence.squeeze_()
-                        words = []
-                        for input_word in input_sentence:
-                            word = dataset.to_word(input_word.squeeze_().item())
-                            words.append(word)
-                        predicted.write(" ".join(words))
-                        words = []
-                        for output_word in output_sentence:
-                            word = dataset.to_word(output_word.squeeze_().item())
-                            words.append(word)
-                        predicted.wirte(" ".join(words))
-                        predicted.write("------------")
+        with torch.no_grad(), open("predict.txt", "w+") as predicted:
+            for _ in range(args.predicted):
+                random_index = random.randint(low=0, high=len(dataset) - args.maxlen)
+                sentences = dataset[random_index : random_index + args.maxlen]
+                for j in range(sentences.shape[1]):
+                    input_sentence = sentences[:, j : j + 1]
+                    output_sentence, _ = Q_func(input_sentence)
+                    output_sentence.squeeze_()
+                    words = []
+                    for input_word in input_sentence:
+                        word = dataset.to_word(input_word.squeeze_().item())
+                        words.append(word)
+                    predicted.write(" ".join(words))
+                    words = []
+                    for output_word in output_sentence:
+                        word = dataset.to_word(output_word.squeeze_().item())
+                        words.append(word)
+                    predicted.wirte(" ".join(words))
+                    predicted.write("------------")
