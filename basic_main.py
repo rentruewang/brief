@@ -1,16 +1,15 @@
 from argparse import ArgumentParser
 
-import numpy as np
 import torch
 from numpy import random
-from torch import cuda, nn, optim
+from torch import cuda
 from torch.nn import BCELoss, CrossEntropyLoss, MSELoss
 from torch.nn import functional as F
+from torch.optim import Adam
 from torch.utils.data import DataLoader, Dataset
 
 from basic_models import Discriminator, Q_Generator, Reconstructor
 from datasets import AmazonReviewDataset
-from Q import main
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -46,7 +45,7 @@ if __name__ == "__main__":
             def __getitem__(self, index):
                 return self.data[index]
 
-            def to_index(self, sos):
+            def to_index(self, _):
                 return 0
 
             @property
@@ -93,7 +92,6 @@ if __name__ == "__main__":
     discriminator = Discriminator(
         voc_size=dataset.size,
         hidden_size=args.hidden,
-        time_steps=args.timesteps,
         device=args.device,
         num_layers=args.rnn_layers,
     ).to(args.device)
@@ -109,9 +107,9 @@ if __name__ == "__main__":
     mse_loss = MSELoss()
     categorical_crossentropy = CrossEntropyLoss()
 
-    Q_optimizer = optim.RMSprop(Q_func.parameters(), lr=args.lr)
-    R_optimizer = optim.RMSprop(reconstructor.parameters(), lr=args.lr)
-    D_optimizer = optim.RMSprop(discriminator.parameters(), lr=args.lr)
+    Q_optimizer = Adam(Q_func.parameters(), lr=args.lr)
+    R_optimizer = Adam(reconstructor.parameters(), lr=args.lr)
+    D_optimizer = Adam(discriminator.parameters(), lr=args.lr)
 
     for epoch in range(1, 1 + args.epochs):
 
@@ -128,7 +126,7 @@ if __name__ == "__main__":
 
             loss += binary_crossentropy(dis_output, ones)
 
-            sentences, _ = Q_func(dis_input)
+            (sentences, _) = Q_func(dis_input)
 
             dis_output = discriminator(sentences)
             zeros = torch.zeros_like(dis_output, device=args.device)
@@ -144,7 +142,7 @@ if __name__ == "__main__":
             cuda.empty_cache()
 
             # train Q function
-            sentences, Q_values = Q_func(q_input)
+            (sentences, Q_values) = Q_func(q_input)
 
             dis_output = discriminator(sentences)
             ones = torch.ones_like(dis_output)

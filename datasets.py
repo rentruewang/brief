@@ -32,7 +32,7 @@ class Pair:
         for key in self.__reserved.keys():
             if self.__reserved[key] >= self.threshold:
                 self._to_word.append(key)
-        for index, word in enumerate(self._to_word):
+        for (index, word) in enumerate(self._to_word):
             self._to_index[word] = index
         self.__built = True
 
@@ -204,7 +204,7 @@ class AmazonSentenceDataset(Dataset):
 
         sentences_t = [torch.tensor(s, dtype=torch.long) for s in sentences]
 
-        sentences_t = pad_sequence(
+        sentences_t = rnn.pad_sequence(
             sentences_t, padding_value=self.pair._to_index["__PAD__"]
         )
 
@@ -243,9 +243,7 @@ class AmazonFullDataset(Dataset):
     returns a sentene along with its score and summary
     """
 
-    def __init__(
-        self, filename, threshold, timesteps, device, on_gpu=False, full=False
-    ):
+    def __init__(self, filename, threshold, timesteps, device, on_gpu=False):
         def process(string):
             string = re.sub(pattern="[a-z]*&.;", repl=" ", string=string)
 
@@ -293,7 +291,7 @@ class AmazonFullDataset(Dataset):
 
         self.pair = Pair(threshold)
 
-        for t, s in zip(review_text, review_summary):
+        for (t, s) in zip(review_text, review_summary):
             for sentence in t:
                 for word in sentence.split(" "):
                     self.pair += word
@@ -302,8 +300,8 @@ class AmazonFullDataset(Dataset):
 
         self.pair.build()
 
-        text, summ = [], []
-        for t, s in zip(review_text, review_summary):
+        (text, summ) = ([], [])
+        for (t, s) in zip(review_text, review_summary):
             ss = []
             for sentence in t:
                 sen = []
@@ -345,9 +343,9 @@ class AmazonFullDataset(Dataset):
         rand = random.randint(low=0, high=len(self.text[index]))
         if self.on_gpu:
             return (self.text[index][rand], self.summ[index], self.overall[index])
-        else:
-            return (
-                self.text[index][rand].to(self.device),
-                self.summ[index].to(self.device),
-                self.overall[index].to(self.device),
-            )
+
+        return (
+            self.text[index][rand].to(self.device),
+            self.summ[index].to(self.device),
+            self.overall[index].to(self.device),
+        )

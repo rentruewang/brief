@@ -10,14 +10,16 @@ In the module, D, G, R's submodules are to be used directly.
 """
 from argparse import ArgumentParser
 from os import makedirs
-from os.path import join
+from os import path as os_path
 
 import numpy as np
 import torch
-from numpy import exp2, random
-from torch import cuda, nn, optim
+from numpy import random
+from torch import cuda, no_grad
 from torch.distributions import Categorical
+from torch.nn import BCELoss, CrossEntropyLoss, Linear, Module, SmoothL1Loss
 from torch.nn import functional as F
+from torch.optim import SGD, Adam
 from torch.utils.data import DataLoader, Dataset
 
 from basic_models import AttnDecoder as Decoder
@@ -68,14 +70,14 @@ def select_value(QOutput, indexList):
     assert int(QOutput.shape[0]) == len(indexList)
 
     output = []
-    for batch, index in enumerate(indexList):
+    for (batch, index) in enumerate(indexList):
         output.append(QOutput[batch, index])
     return torch.stack(output, dim=0)
 
 
 def take_action(QFunc, states, epsilon, categorical=False):
 
-    output, states = QFunc(*states)
+    (output, states) = QFunc(*states)
 
     if random.uniform(low=0.0, high=1.0) < epsilon():
         index = torch.randint(low=0, high=output.shape[-1], size=[output.shape[0]])
@@ -83,7 +85,7 @@ def take_action(QFunc, states, epsilon, categorical=False):
         index = Categorical(F.softmax(output, dim=-1)).sample()
     else:
         index = output.argmax(-1)
-    return index, states
+    return (index, states)
 
 
 class Storage:
@@ -107,19 +109,19 @@ class Storage:
 
     def optimize(self, QFunc, Qoptim, QEval, QlossFunc, on):
         if self.tdlambda >= 0:
-            for S, action, reward in self.data:
+            for (S, action, reward) in self.data:
                 loss = torch.tensor(0.0, device=on)
                 Q_values = []
-                for st, ac in zip(S[:-1], action):
-                    output, _ = QFunc(*st)
+                for (st, ac) in zip(S[:-1], action):
+                    (output, _) = QFunc(*st)
                     Q_values.append(select_value(output.squeeze_(0), ac))
                 Q_NSval = []
-                for st, ac in zip(S[1:], action):
-                    output, _ = QEval(*st)
+                for (st, ac) in zip(S[1:], action):
+                    (output, _) = QEval(*st)
                     Q_NSval.append(output.squeeze_(0).max(-1)[0])
 
                 coefficient = 1
-                for Q, next_Q, rew in zip(Q_values[:-1], Q_NSval[:-1], reward[:-1]):
+                for (Q, next_Q, rew) in zip(Q_values[:-1], Q_NSval[:-1], reward[:-1]):
                     loss += coefficient * QlossFunc(Q, rew + next_Q)
                     coefficient *= self.tdlambda
                 loss *= 1 - self.tdlambda
@@ -131,10 +133,10 @@ class Storage:
                 # S = [action, states, gru_out]
                 Qoptim.step()
         elif self.multistep:
-            for S, action, reward in self.data:
-                output, _ = QFunc(*S[0])
+            for (S, action, reward) in self.data:
+                (output, _) = QFunc(*S[0])
                 Q_value = select_value(output.squeeze_(0), action[0])
-                Q_NSval, _ = QEval(*S[-1])
+                (Q_NSval, _) = QEval(*S[-1])
                 Q_NSval = Q_NSval.squeeze_(0).max(-1)[0]
                 r = sum(reward)
                 loss = QlossFunc(Q_value, r + Q_NSval)
@@ -145,16 +147,16 @@ class Storage:
                 # S = [action, states, gru_out]
                 Qoptim.step()
         else:
-            for S, action, reward in self.data:
+            for (S, action, reward) in self.data:
                 loss = torch.tensor(0.0, device=on)
                 Q_values = []
-                for st, ac in zip(S[:-1], action):
-                    output, _ = QFunc(*st)
+                for (st, ac) in zip(S[:-1], action):
+                    (output, _) = QFunc(*st)
                     Q_values.append(select_value(output.squeeze_(0), ac))
-                output, _ = QEval(*S[-1])
+                (output, _) = QEval(*S[-1])
                 Q_values.append(output.squeeze_(0).max(-1)[0])
 
-                for i, r in enumerate(reward):
+                for (i, r) in enumerate(reward):
                     loss += QlossFunc(Q_values[i], r + Q_values[i + 1])
 
                 Qoptim.zero_grad()
@@ -164,13 +166,13 @@ class Storage:
                 Qoptim.step()
 
 
-class Dual(nn.Module):
+class Dual(Module):
     def __init__(self, in_features, out_features, bias=False):
         super().__init__()
-        self.advantage = nn.Linear(
+        self.advantage = Linear(
             in_features=in_features, out_features=out_features, bias=bias
         )
-        self.average = nn.Linear(in_features=in_features, out_features=1, bias=bias)
+        self.average = Linear(in_features=in_features, out_features=1, bias=bias)
 
     def forward(self, input):
         advantage = self.advantage(input)
@@ -179,31 +181,31 @@ class Dual(nn.Module):
         return advantage + average
 
 
-class FullDecoder(nn.Module):
+class FullDecoder(Module):
     def __init__(self, voc_size, decoder):
         super().__init__()
         self.decoder = decoder
-        self.out_layer = nn.Linear(decoder.hidden_size, voc_size)
+        self.out_layer = Linear(decoder.hidden_size, voc_size)
 
     def forward(self, *args, **kwargs):
-        output, states = self.decoder(*args, **kwargs)
+        (output, states) = self.decoder(*args, **kwargs)
         output = self.out_layer(F.relu(output))
-        return output, states
+        return (output, states)
 
 
-class Q(nn.Module):
+class Q(Module):
     def __init__(self, dec, dual):
         super().__init__()
         self.dec = dec
         self.dual = dual
 
     def forward(self, input, states, gru_out):
-        output, states = self.dec(input, states, gru_out)
+        (output, states) = self.dec(input, states, gru_out)
         values = self.dual(output)
-        return values, states
+        return (values, states)
 
 
-class G(nn.Module):
+class G(Module):
     """
     takes an unfinished sentence, evaluate the best choice
     1 trained independently using generator as reward
@@ -221,7 +223,7 @@ class G(nn.Module):
         self.timesteps = timesteps
         self.num_layers = num_layers
         self.on = on
-        self.sos, self.pad = sos_pad
+        (self.sos, self.pad) = sos_pad
 
     def forward(self, sentence):
         """
@@ -231,35 +233,35 @@ class G(nn.Module):
 
         states = torch.zeros((self.num_layers, batch, self.hidden_size), device=self.on)
 
-        encoded, states = self.encoder(sentence, states)
+        (encoded, states) = self.encoder(sentence, states)
 
         word = torch.tensor([self.sos] * batch, device=self.on)
         shortened = []
 
         for _ in range(self.timesteps):
 
-            distribution, states = self.QFunc(word, states, encoded)
+            (distribution, states) = self.QFunc(word, states, encoded)
             word = distribution.argmax(-1)
             shortened.append(word)
 
         return torch.cat(shortened, dim=0)
 
-    def synchronise(self, QFunc):
+    def synchronize(self, QFunc):
         self.load_state_dict(QFunc.state_dict())
         return self
 
 
-class D(nn.Module):
+class D(Module):
     """
     takes a sentence, determine if it's real (1) or generated (0)
     1 trained on real text
     2 trained on generated text
     """
 
-    def __init__(self, voc_size, hidden_size, timesteps, on, num_layers=5):
+    def __init__(self, voc_size, hidden_size, on, num_layers=5):
         super().__init__()
         self.encoder = Encoder(voc_size, hidden_size, num_layers)
-        self.score = nn.Linear(hidden_size * (num_layers + 1), 1)
+        self.score = Linear(hidden_size * (num_layers + 1), 1)
 
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -272,7 +274,7 @@ class D(nn.Module):
         batch = sentence.shape[1]
         states = torch.zeros((self.num_layers, batch, self.hidden_size), device=self.on)
 
-        gru_out, states = self.encoder(sentence, states)
+        (gru_out, states) = self.encoder(sentence, states)
         gru_out = F.relu(gru_out[-1])
 
         output = torch.cat(
@@ -283,7 +285,7 @@ class D(nn.Module):
         return F.sigmoid(output)
 
 
-class R(nn.Module):
+class R(Module):
     """
     takes a one hot encoded input [or softmax] and recreate the original input
     1 trained on data Q generates
@@ -307,31 +309,31 @@ class R(nn.Module):
         """
         batch = shortened.shape[1]
         states = torch.zeros((self.num_layers, batch, self.hidden_size), device=self.on)
-        encoded, states = self.encoder(shortened, states)
+        (encoded, states) = self.encoder(shortened, states)
 
         original = []
         word = torch.tensor([self.sos] * batch, device=self.on)
 
         for _ in range(self.timesteps):
 
-            distribution, states = self.decoder(word, states, encoded)
+            (distribution, states) = self.decoder(word, states, encoded)
             word = distribution.argmax(-1)
             original.append(word)
 
         return torch.cat(original, dim=0)
 
 
-class S(nn.Module):
+class S(Module):
     """
     takes a sentence, determine its score
     1 trained on real text
     2 trained on generated text
     """
 
-    def __init__(self, voc_size, hidden_size, timesteps, on, num_layers=5):
+    def __init__(self, voc_size, hidden_size, on, num_layers=5):
         super().__init__()
         self.encoder = Encoder(voc_size, hidden_size, num_layers)
-        self.score = nn.Linear(hidden_size * (num_layers + 1), 5)
+        self.score = Linear(hidden_size * (num_layers + 1), 5)
 
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -339,12 +341,12 @@ class S(nn.Module):
 
     def forward(self, sentence):
         """
-        sentence: a batch of timesteps -> shape: timesteps, batch
+        sentence: a batch of timesteps -> shape: (timesteps, batch)
         """
         batch = sentence.shape[1]
         states = torch.zeros((self.num_layers, batch, self.hidden_size), device=self.on)
 
-        gru_out, states = self.encoder(sentence, states)
+        (gru_out, states) = self.encoder(sentence, states)
         gru_out = F.relu(gru_out[-1])
 
         output = torch.cat(
@@ -415,13 +417,13 @@ def train_one_batch(
     batch = batched_data.shape[1]
     states = torch.zeros((R.num_layers, batch, R.hidden_size), device=R.on)
 
-    encoded, states = R.encoder(generated, states)
+    (encoded, states) = R.encoder(generated, states)
 
     word = torch.tensor([R.sos] * batch, device=R.on)
     loss = torch.tensor(0.0, device=R.on)
 
     for batched_word in batched_data:
-        output, states = R.decoder(word, states, encoded)
+        (output, states) = R.decoder(word, states, encoded)
         loss += RLossFunc(output.squeeze_(0), batched_word)
         word = batched_word if RTeacher else output.argmax(-1)
 
@@ -430,7 +432,7 @@ def train_one_batch(
     Roptim.step()
 
     if sync:
-        GTarget.synchronise(GUpdate)
+        GTarget.synchronize(GUpdate)
 
     all_steps = len(batched_data)
     current_step = 0
@@ -440,7 +442,7 @@ def train_one_batch(
     states = torch.zeros(
         (GUpdate.num_layers, batch, GUpdate.hidden_size), device=GUpdate.on
     )
-    encoded, states = GUpdate.encoder(batched_data, states)
+    (encoded, states) = GUpdate.encoder(batched_data, states)
 
     word = torch.tensor([GUpdate.sos] * batch, device=GUpdate.on)
     pad = torch.tensor([GUpdate.pad] * batch, device=GUpdate.on)
@@ -451,12 +453,12 @@ def train_one_batch(
         if current_step + step > all_steps:
             step = all_steps - current_step
 
-        states_list, reward_list, action_list = [], [], []
+        (states_list, reward_list, action_list) = ([], [], [])
         S = [word, states, encoded]
         states_list.append(S)
 
         for _ in range(step):
-            action, states = take_action(GUpdate.QFunc, S, epsilon, categorical)
+            (action, states) = take_action(GUpdate.QFunc, S, epsilon, categorical)
             S = [action, states, encoded]
             states_list.append(S)
             reward_list.append(torch.tensor([0.0] * batch, device=GUpdate.on))
@@ -465,7 +467,7 @@ def train_one_batch(
 
         current_step += step
         if current_step >= all_steps:
-            _, states = take_action(GUpdate.QFunc, S, epsilon, categorical)
+            (_, states) = take_action(GUpdate.QFunc, S, epsilon, categorical)
             action_list.append(pad)
             S = [action, states, encoded]
             states_list.append(S)
@@ -474,11 +476,11 @@ def train_one_batch(
             loss = torch.tensor([0.0] * batch, device=GUpdate.on)
 
             s = torch.zeros((R.num_layers, batch, R.hidden_size), device=R.on)
-            Rencoded, s = R.encoder(shortened, s)
+            (Rencoded, s) = R.encoder(shortened, s)
 
             word = torch.tensor([R.sos] * batch, device=R.on)
             for B in batched_data:
-                output, s = R.decoder(word, s, Rencoded)
+                (output, s) = R.decoder(word, s, Rencoded)
                 output.squeeze_(0)
                 for i in range(batch):
                     loss[i] += RLossFunc(output[i : i + 1], B[i : i + 1])
@@ -525,12 +527,11 @@ def F_train_one_batch(
     until=3,
 ):
 
-    sentences, summaries, scores = batched_data
-    """
-    sentences: a batch of sentences with normal ordering -> shape: batch, timesteps
-    summaries: a batch of sentences with normal ordering -> shape: batch, timesteps
-    scores: a batch of scores -> shape: batch
-    """
+    # sentences: a batch of sentences with normal ordering -> shape: batch, timesteps
+    # summaries: a batch of sentences with normal ordering -> shape: batch, timesteps
+    # scores: a batch of scores -> shape: batch
+    (sentences, summaries, scores) = batched_data
+
     sentences = sentences.permute(1, 0)
     summaries = summaries.permute(1, 0)
 
@@ -578,13 +579,13 @@ def F_train_one_batch(
     batch = sentences.shape[1]
     states = torch.zeros((R.num_layers, batch, R.hidden_size), device=R.on)
 
-    encoded, states = R.encoder(generated, states)
+    (encoded, states) = R.encoder(generated, states)
 
     word = torch.tensor([R.sos] * batch, device=R.on)
     RLoss = torch.tensor(0.0, device=R.on)
 
     for batched_word in sentences:
-        Routput, states = R.decoder(word, states, encoded)
+        (Routput, states) = R.decoder(word, states, encoded)
         RLoss += RLossFunc(Routput.squeeze_(0), batched_word)
         word = batched_word if RTeacher else Routput.argmax(-1)
 
@@ -593,7 +594,7 @@ def F_train_one_batch(
     Roptim.step()
 
     if sync:
-        GTarget.synchronise(GUpdate)
+        GTarget.synchronize(GUpdate)
 
     all_steps = len(sentences)
     current_step = 0
@@ -604,7 +605,7 @@ def F_train_one_batch(
     states = torch.zeros(
         (GUpdate.num_layers, batch, GUpdate.hidden_size), device=GUpdate.on
     )
-    encoded, states = GUpdate.encoder(sentences, states)
+    (encoded, states) = GUpdate.encoder(sentences, states)
 
     word = torch.tensor([GUpdate.sos] * batch, device=GUpdate.on)
     pad = torch.tensor([GUpdate.pad] * batch, device=GUpdate.on)
@@ -615,12 +616,12 @@ def F_train_one_batch(
         if current_step + step > all_steps:
             step = all_steps - current_step
 
-        states_list, reward_list, action_list = [], [], []
+        (states_list, reward_list, action_list) = ([], [], [])
         STATES = [word, states, encoded]
         states_list.append(STATES)
 
         for _ in range(step):
-            action, states = take_action(GUpdate.QFunc, STATES, epsilon, categorical)
+            (action, states) = take_action(GUpdate.QFunc, STATES, epsilon, categorical)
             STATES = [action, states, encoded]
             states_list.append(STATES)
             reward_list.append(torch.tensor([0.0] * batch, device=GUpdate.on))
@@ -629,7 +630,7 @@ def F_train_one_batch(
 
         current_step += step
         if current_step >= all_steps:
-            _, states = take_action(GUpdate.QFunc, STATES, epsilon, categorical)
+            (_, states) = take_action(GUpdate.QFunc, STATES, epsilon, categorical)
             action_list.append(pad)
             STATES = [action, states, encoded]
             states_list.append(STATES)
@@ -638,11 +639,11 @@ def F_train_one_batch(
             RLoss = torch.tensor([0.0] * batch, device=GUpdate.on)
 
             s = torch.zeros((R.num_layers, batch, R.hidden_size), device=R.on)
-            Rencoded, s = R.encoder(shortened, s)
+            (Rencoded, s) = R.encoder(shortened, s)
 
             word = torch.tensor([R.sos] * batch, device=R.on)
             for B in sentences:
-                Routput, s = R.decoder(word, s, Rencoded)
+                (Routput, s) = R.decoder(word, s, Rencoded)
                 Routput.squeeze_(0)
                 for i in range(batch):
                     RLoss[i] += RLossFunc(Routput[i : i + 1], B[i : i + 1])
@@ -683,21 +684,21 @@ def summarize_input(G=None, weight_dir=None, on="cpu", wi_iw=None):
 
     print(
         "Rules: In sentence prediction, every `word` has to be separated,"
-        + 'including .(periods) ,(commas), "(quotes) etc.'
+        'including .(periods) ,(commas), "(quotes) etc.'
     )
 
     if G:
         pass
     elif weight_dir:
-        G = torch.load(f=join(weight_dir, "Generator.pt"), map_location=on)
+        G = torch.load(f=os_path.join(weight_dir, "Generator.pt"), map_location=on)
     else:
         raise FileNotFoundError("File Not Found")
 
     if wi_iw:
-        word_index, index_word = wi_iw
+        (word_index, index_word) = wi_iw
     else:
-        word_index = torch.load(f=join(weight_dir, "to_index.pt"))
-        index_word = torch.load(f=join(weight_dir, "to_word.pt"))
+        word_index = torch.load(f=os_path.join(weight_dir, "to_index.pt"))
+        index_word = torch.load(f=os_path.join(weight_dir, "to_word.pt"))
 
     def to_index(word):
         if word in word_index.keys():
@@ -708,7 +709,7 @@ def summarize_input(G=None, weight_dir=None, on="cpu", wi_iw=None):
     def to_word(index):
         return index_word[index]
 
-    with torch.no_grad():
+    with no_grad():
         while True:
             print("Input a sentence, or type `:quit` to leave.\n")
             input_sentence = input()
@@ -742,7 +743,7 @@ def test():
     lr = 1e-3
     SOS = 0
     PAD = 1
-    dis = D(voc_size, hidden_size, timesteps, on=on, num_layers=1).to(on)
+    dis = D(voc_size, hidden_size, on=on, num_layers=1).to(on)
     gen = G(
         voc_size,
         hidden_size,
@@ -754,11 +755,11 @@ def test():
     rec = R(voc_size, hidden_size, timesteps, on=on, sos=SOS, num_layers=num_layers).to(
         on
     )
-    scr = S(voc_size, hidden_size, timesteps, on=on, num_layers=1).to(on)
-    do = optim.SGD(dis.parameters(), lr=lr)
-    go = optim.SGD(gen.parameters(), lr=lr)
-    ro = optim.SGD(rec.parameters(), lr=lr)
-    so = optim.SGD(scr.parameters(), lr=lr)
+    scr = S(voc_size, hidden_size, on=on, num_layers=1).to(on)
+    do = SGD(dis.parameters(), lr=lr)
+    go = SGD(gen.parameters(), lr=lr)
+    ro = SGD(rec.parameters(), lr=lr)
+    so = SGD(scr.parameters(), lr=lr)
     print("S")
     summarize_input(
         gen,
@@ -876,7 +877,7 @@ def main():
     device = args.device if cuda.is_available() else "cpu"
     on_gpu = not args.off_gpu
     memory_decay = args.Mdecay
-    epsilon_decay = exp2(-args.Edecay)
+    epsilon_decay = np.exp2(-args.Edecay)
     epsilon_0 = args.epsilon
     categorical = args.categorical
     syncOn = args.sync
@@ -890,9 +891,9 @@ def main():
     if full:
         """
         if full:
-            data is not transposed: shape -> batch, timesteps
+            data is not transposed: shape -> (batch, timesteps)
         else:
-            data is transposed: shape -> timesteps, batch
+            data is transposed: shape -> (timesteps, batch)
         """
 
         dataset = AFDataset(
@@ -930,15 +931,14 @@ def main():
     SOS = dataset.to_index("__SOS__")
     PAD = dataset.to_index("__PAD__")
 
-    torch.save(obj=dataset.pair._to_index, f=join(weight_dir, "to_index.pt"))
-    torch.save(obj=dataset.pair._to_word, f=join(weight_dir, "to_word.pt"))
+    torch.save(obj=dataset.pair._to_index, f=os_path.join(weight_dir, "to_index.pt"))
+    torch.save(obj=dataset.pair._to_word, f=os_path.join(weight_dir, "to_word.pt"))
 
     voc_size = dataset.size
 
     dis = D(
         voc_size=voc_size,
         hidden_size=hidden_size,
-        timesteps=timesteps,
         num_layers=num_layers,
         on=device,
     ).to(device)
@@ -970,24 +970,23 @@ def main():
         num_layers=num_layers,
     ).to(device)
 
-    dis_optim = optim.RMSprop(params=dis.parameters(), lr=lr)
-    gen_optim = optim.RMSprop(params=gen_update.parameters(), lr=lr)
-    rec_optim = optim.RMSprop(params=rec.parameters(), lr=lr)
+    dis_optim = Adam(params=dis.parameters(), lr=lr)
+    gen_optim = Adam(params=gen_update.parameters(), lr=lr)
+    rec_optim = Adam(params=rec.parameters(), lr=lr)
 
-    dis_loss = nn.BCELoss()
-    gen_loss = nn.SmoothL1Loss()
-    rec_loss = nn.CrossEntropyLoss()
+    dis_loss = BCELoss()
+    gen_loss = SmoothL1Loss()
+    rec_loss = CrossEntropyLoss()
 
     if full:
         scr = S(
             voc_size=voc_size,
             hidden_size=hidden_size,
-            timesteps=timesteps,
             num_layers=num_layers,
             on=device,
         ).to(device)
-        scr_optim = optim.RMSprop(params=scr.parameters(), lr=lr)
-        scr_loss = nn.CrossEntropyLoss()
+        scr_optim = Adam(params=scr.parameters(), lr=lr)
+        scr_loss = CrossEntropyLoss()
 
     epsilon = Epsilon(epsilon_0, epsilon_decay)
     step = Step(E=step_E)
@@ -1051,27 +1050,31 @@ def main():
 
         torch.save(
             obj=dis.state_dict(),
-            f=join(weight_dir, "Discriminator_{:03d}.pt".format(epoch)),
+            f=os_path.join(weight_dir, "Discriminator_{:03d}.pt".format(epoch)),
         )
         torch.save(
             obj=gen_update.state_dict(),
-            f=join(weight_dir, "Generator_{:03d}.pt".format(epoch)),
+            f=os_path.join(weight_dir, "Generator_{:03d}.pt".format(epoch)),
         )
         torch.save(
             obj=rec.state_dict(),
-            f=join(weight_dir, "Reconstructor_{:03d}.pt".format(epoch)),
+            f=os_path.join(weight_dir, "Reconstructor_{:03d}.pt".format(epoch)),
         )
         # for prediction use
-        torch.save(obj=dis.state_dict(), f=join(weight_dir, "Discriminator.pt"))
-        torch.save(obj=gen_update.state_dict(), f=join(weight_dir, "Generator.pt"))
-        torch.save(obj=rec.state_dict(), f=join(weight_dir, "Reconstructor.pt"))
+        torch.save(obj=dis.state_dict(), f=os_path.join(weight_dir, "Discriminator.pt"))
+        torch.save(
+            obj=gen_update.state_dict(), f=os_path.join(weight_dir, "Generator.pt")
+        )
+        torch.save(obj=rec.state_dict(), f=os_path.join(weight_dir, "Reconstructor.pt"))
 
         if full:
             torch.save(
                 obj=scr.state_dict(),
-                f=join(weight_dir, "ScorePredict_{:03d}.pt".format(epoch)),
+                f=os_path.join(weight_dir, "ScorePredict_{:03d}.pt".format(epoch)),
             )
-            torch.save(obj=scr.state_dict(), f=join(weight_dir, "ScorePredict.pt"))
+            torch.save(
+                obj=scr.state_dict(), f=os_path.join(weight_dir, "ScorePredict.pt")
+            )
 
     if predict:
         summarize_input(
@@ -1082,4 +1085,5 @@ def main():
         )
 
 
-main()
+if __name__ == "__main__":
+    main()
