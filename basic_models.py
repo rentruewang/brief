@@ -283,7 +283,7 @@ if __name__ == "__main__":
     embedding_dim = 17
     timesteps = 37
     batch = 109
-    size = (timesteps, batch)
+    size = timesteps, batch
     num_layers = 3
 
     dis = Discriminator(voc_size, hidden_size, "cpu")
