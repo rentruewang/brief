@@ -135,7 +135,7 @@ class Q_Generator(Module):
             device=self.device,
             requires_grad=True,
         )
-        (gru_out, states) = self.encoder(input, states)
+        gru_out, states = self.encoder(input, states)
 
         current_word = torch.tensor([self.sos_value] * batch_size, device=self.device)
 
@@ -144,7 +144,7 @@ class Q_Generator(Module):
 
         for _ in range(self.max_len):
 
-            (rnn_out, states) = self.decoder(current_word, states, gru_out)
+            rnn_out, states = self.decoder(current_word, states, gru_out)
             values = (self.average(rnn_out) + self.advantage(rnn_out)).squeeze(0)
 
             current_word = values.argmax(-1)
@@ -169,7 +169,7 @@ class Q_Generator(Module):
             batched_sentences.append(rnn_out)
 
             v_list = []
-            for (i, word) in zip(range(len(values)), current_word):
+            for i, word in zip(range(len(values)), current_word):
                 v_list.append(values[i, word])
             batched_Q.append(torch.stack(v_list, dim=0))
 
@@ -214,7 +214,7 @@ class Reconstructor(Module):
             device=self.device,
             requires_grad=True,
         )
-        (gru_out, states) = self.encoder(input, states)
+        gru_out, states = self.encoder(input, states)
 
         current_word = torch.tensor([self.sos_value] * batch_size, device=self.device)
 
@@ -222,7 +222,7 @@ class Reconstructor(Module):
 
         for _ in range(self.max_len):
 
-            (rnn_out, states) = self.decoder(current_word, states, gru_out)
+            rnn_out, states = self.decoder(current_word, states, gru_out)
 
             rnn_out = self.output(rnn_out)
 
@@ -261,11 +261,11 @@ class Discriminator(Module):
             device=self.device,
             requires_grad=True,
         )
-        (gru_out, states) = self.encoder(F.relu(input), states)
-        (gru_out, states) = self.gru(F.relu(gru_out), states)
+        gru_out, states = self.encoder(F.relu(input), states)
+        gru_out, states = self.gru(F.relu(gru_out), states)
         output_states = [[s] for s in states]
-        for (t_i, timestep_output) in enumerate(gru_out):
-            for (g_i, grucell) in enumerate(self.grucell_list):
+        for t_i, timestep_output in enumerate(gru_out):
+            for g_i, grucell in enumerate(self.grucell_list):
                 state = grucell(timestep_output, output_states[g_i][t_i])
                 output_states[g_i].append(state)
 

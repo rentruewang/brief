@@ -32,7 +32,7 @@ class Pair:
         for key in self.__reserved.keys():
             if self.__reserved[key] >= self.threshold:
                 self._to_word.append(key)
-        for (index, word) in enumerate(self._to_word):
+        for index, word in enumerate(self._to_word):
             self._to_index[word] = index
         self.__built = True
 
@@ -291,7 +291,7 @@ class AmazonFullDataset(Dataset):
 
         self.pair = Pair(threshold)
 
-        for (t, s) in zip(review_text, review_summary):
+        for t, s in zip(review_text, review_summary):
             for sentence in t:
                 for word in sentence.split(" "):
                     self.pair += word
@@ -300,8 +300,9 @@ class AmazonFullDataset(Dataset):
 
         self.pair.build()
 
-        (text, summ) = ([], [])
-        for (t, s) in zip(review_text, review_summary):
+        text = []
+        summ = []
+        for t, s in zip(review_text, review_summary):
             ss = []
             for sentence in t:
                 sen = []

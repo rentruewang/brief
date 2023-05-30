@@ -116,7 +116,7 @@ if __name__ == "__main__":
         print("epoch {} / {}".format(epoch, args.epochs))
         avgloss = []
 
-        for (q_input, dis_input) in zip(dataloader, dataloader):
+        for q_input, dis_input in zip(dataloader, dataloader):
 
             loss = torch.tensor(0.0, device=args.device)
 
@@ -126,7 +126,7 @@ if __name__ == "__main__":
 
             loss += binary_crossentropy(dis_output, ones)
 
-            (sentences, _) = Q_func(dis_input)
+            sentences, _ = Q_func(dis_input)
 
             dis_output = discriminator(sentences)
             zeros = torch.zeros_like(dis_output, device=args.device)
@@ -142,7 +142,7 @@ if __name__ == "__main__":
             cuda.empty_cache()
 
             # train Q function
-            (sentences, Q_values) = Q_func(q_input)
+            sentences, Q_values = Q_func(q_input)
 
             dis_output = discriminator(sentences)
             ones = torch.ones_like(dis_output)

@@ -7,20 +7,20 @@ jobs:
       - name: 🔔 Check out
         uses: actions/checkout@v2
     
-      - name: 🏗️ python 3.8
+      - name: 🏗️ python 3.10
         uses: actions/setup-python@v2
         with:
-          python-version: 3.8
+          python-version: 3.10
       - name: ⬇️ black
         run: pip install black
       - name: 🏃 black
         run: black .
 
       - name: ⬆️ Add and Commit
-        uses: EndBug/add-and-commit@v7
+        uses: EndBug/add-and-commit@v9
         with:
           author_name: "github-actions[bot]"
           author_email: "github-actions[bot]@users.noreply.github.com"
-          message: "🤖 R3nTru3W4n9 thinks you forgot to format your code!"
+          message: "🤖 RenTrueWang thinks you forgot to format your code!"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
