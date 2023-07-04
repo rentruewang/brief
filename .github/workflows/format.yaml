@@ -6,21 +6,18 @@ jobs:
     steps:
       - name: 🔔 Check out
         uses: actions/checkout@v2
-    
+
       - name: 🏗️ python 3.10
         uses: actions/setup-python@v2
         with:
-          python-version: 3.10
+          python-version: "3.10"
+
+      - name: ⬇️ isort
+        run: pip install isort
+      - name: 🏃 isort
+        run: isort --profile black --check .
+
       - name: ⬇️ black
         run: pip install black
       - name: 🏃 black
-        run: black .
-
-      - name: ⬆️ Add and Commit
-        uses: EndBug/add-and-commit@v9
-        with:
-          author_name: "github-actions[bot]"
-          author_email: "github-actions[bot]@users.noreply.github.com"
-          message: "🤖 RenTrueWang thinks you forgot to format your code!"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: black --check .

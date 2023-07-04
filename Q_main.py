@@ -4,7 +4,6 @@ from os import path as os_path
 import torch
 from torch import cuda
 from torch.nn import SmoothL1Loss
-from torch.nn import functional as F
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 
