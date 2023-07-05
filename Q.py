@@ -61,7 +61,6 @@ def short_reward(sentence, pad, sReward, on):
 
 
 def select_value(QOutput, indexList):
-
     assert int(QOutput.shape[0]) == len(indexList)
 
     output = []
@@ -71,7 +70,6 @@ def select_value(QOutput, indexList):
 
 
 def take_action(QFunc, states, epsilon, categorical=False):
-
     output, states = QFunc(*states)
 
     if random.uniform(low=0.0, high=1.0) < epsilon():
@@ -234,7 +232,6 @@ class G(Module):
         shortened = []
 
         for _ in range(self.timesteps):
-
             distribution, states = self.QFunc(word, states, encoded)
             word = distribution.argmax(-1)
             shortened.append(word)
@@ -310,7 +307,6 @@ class R(Module):
         word = torch.tensor([self.sos] * batch, device=self.on)
 
         for _ in range(self.timesteps):
-
             distribution, states = self.decoder(word, states, encoded)
             word = distribution.argmax(-1)
             original.append(word)
@@ -390,7 +386,6 @@ def train_one_batch(
     RTeacher=True,
     categorical=False,
 ):
-
     # train D
     is_real = D(batched_data)
     true_value = torch.ones_like(is_real, device=D.on)
@@ -516,7 +511,6 @@ def F_train_one_batch(
     rouge=False,
     until=3,
 ):
-
     # sentences: a batch of sentences with normal ordering -> shape: batch, timesteps
     # summaries: a batch of sentences with normal ordering -> shape: batch, timesteps
     # scores: a batch of scores -> shape: batch
@@ -666,7 +660,6 @@ def F_train_one_batch(
 
 
 def summarize_input(G=None, weight_dir=None, on="cpu", wi_iw=None):
-
     print(
         "Rules: In sentence prediction, every `word` has to be separated,"
         'including .(periods) ,(commas), "(quotes) etc.'

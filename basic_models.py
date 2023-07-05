@@ -143,7 +143,6 @@ class Q_Generator(Module):
         batched_Q = []
 
         for _ in range(self.max_len):
-
             rnn_out, states = self.decoder(current_word, states, gru_out)
             values = (self.average(rnn_out) + self.advantage(rnn_out)).squeeze(0)
 
@@ -221,7 +220,6 @@ class Reconstructor(Module):
         batched_distribution = []
 
         for _ in range(self.max_len):
-
             rnn_out, states = self.decoder(current_word, states, gru_out)
 
             rnn_out = self.output(rnn_out)

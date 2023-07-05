@@ -84,7 +84,6 @@ class AmazonReviewDataset(Dataset):
 
     @staticmethod
     def preprocess(string):
-
         string = re.sub(pattern="[a-z]*&.;", repl=" ", string=string)
 
         replaced_chars = ["\\", "\n"]
@@ -178,7 +177,6 @@ class AmazonSentenceDataset(Dataset):
             return self.text[index].to(self.device)
 
     def preprocess(self, string):
-
         string = re.sub(pattern="[a-z]*&.;", repl=" ", string=string)
 
         replaced_chars = ["\\", "\n"]

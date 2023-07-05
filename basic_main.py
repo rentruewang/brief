@@ -112,12 +112,10 @@ if __name__ == "__main__":
     D_optimizer = Adam(discriminator.parameters(), lr=args.lr)
 
     for epoch in range(1, 1 + args.epochs):
-
         print("epoch {} / {}".format(epoch, args.epochs))
         avgloss = []
 
         for q_input, dis_input in zip(dataloader, dataloader):
-
             loss = torch.tensor(0.0, device=args.device)
 
             # train discriminator
