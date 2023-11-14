@@ -13,7 +13,7 @@ from os import path as os_path
 
 import torch
 from numpy import random
-from torch import cuda, no_grad
+from torch import cuda
 from torch.distributions import Categorical
 from torch.nn import Linear, Module
 from torch.nn import functional as F
@@ -687,7 +687,7 @@ def summarize_input(G=None, weight_dir=None, on="cpu", wi_iw=None):
     def to_word(index):
         return index_word[index]
 
-    with no_grad():
+    with torch.no_grad():
         while True:
             print("Input a sentence, or type `:quit` to leave.\n")
             input_sentence = input()
